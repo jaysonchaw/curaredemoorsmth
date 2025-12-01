@@ -1,0 +1,56 @@
+.counter-container {
+  position: relative;
+  display: inline-block;
+}
+
+.counter-counter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.counter-digit {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: hidden;
+  line-height: 1;
+}
+
+.counter-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  text-align: center;
+  flex-shrink: 0;
+  line-height: 1;
+  min-height: 100%;
+}
+
+.gradient-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.top-gradient {
+  width: 100%;
+  z-index: 1;
+}
+
+.bottom-gradient {
+  width: 100%;
+  z-index: 1;
+}
+

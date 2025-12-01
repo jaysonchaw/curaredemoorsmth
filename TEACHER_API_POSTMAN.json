@@ -1,0 +1,572 @@
+{
+  "info": {
+    "name": "Curare Teacher Platform API",
+    "description": "API collection for Curare teacher platform features",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth",
+    "noauth": {}
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3001",
+      "type": "string"
+    },
+    {
+      "key": "teacherId",
+      "value": "your-teacher-id-here",
+      "type": "string"
+    },
+    {
+      "key": "classroomId",
+      "value": "your-classroom-id-here",
+      "type": "string"
+    },
+    {
+      "key": "assignmentId",
+      "value": "your-assignment-id-here",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Lessons",
+      "item": [
+        {
+          "name": "Get All Global Lessons",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/lessons",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "lessons"]
+            }
+          }
+        },
+        {
+          "name": "Get Classroom Lessons",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/lessons/classrooms/{{classroomId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "lessons", "classrooms", "{{classroomId}}"]
+            }
+          }
+        },
+        {
+          "name": "Map Lesson to Classroom",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lessonId\": \"lesson-uuid-here\",\n  \"seqOrder\": 1,\n  \"mandatory\": false,\n  \"locked\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/lessons/classrooms/{{classroomId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "lessons", "classrooms", "{{classroomId}}"]
+            }
+          }
+        },
+        {
+          "name": "Update Lesson Mapping",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"locked\": true,\n  \"mandatory\": true,\n  \"seqOrder\": 2\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/lessons/classrooms/{{classroomId}}/lessons/:classroomLessonId",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "lessons", "classrooms", "{{classroomId}}", "lessons", ":classroomLessonId"]
+            }
+          }
+        },
+        {
+          "name": "Remove Lesson Mapping",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/lessons/classrooms/{{classroomId}}/lessons/:classroomLessonId",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "lessons", "classrooms", "{{classroomId}}", "lessons", ":classroomLessonId"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Assignments",
+      "item": [
+        {
+          "name": "Create Assignment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Cell Biology Quiz\",\n  \"description\": \"Test your knowledge of cells\",\n  \"dueDate\": \"2024-12-31T23:59:59Z\",\n  \"visibilityStart\": \"2024-12-01T00:00:00Z\",\n  \"visibilityEnd\": \"2024-12-31T23:59:59Z\",\n  \"targetLessons\": [],\n  \"questions\": [\n    {\n      \"type\": \"multiple_choice\",\n      \"body\": \"What is the largest organ?\",\n      \"options\": {\n        \"options\": [\"Heart\", \"Liver\", \"Skin\", \"Lungs\"],\n        \"correct\": [2]\n      },\n      \"points\": 5,\n      \"metadata\": {\n        \"hint\": \"Think about what covers your body\",\n        \"adaptiveEnabled\": false\n      },\n      \"order_index\": 0\n    }\n  ],\n  \"status\": \"draft\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/assignments/classrooms/{{classroomId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "assignments", "classrooms", "{{classroomId}}"]
+            }
+          }
+        },
+        {
+          "name": "List Assignments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/assignments/classrooms/{{classroomId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "assignments", "classrooms", "{{classroomId}}"]
+            }
+          }
+        },
+        {
+          "name": "Get Assignment Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/assignments/{{assignmentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "assignments", "{{assignmentId}}"]
+            }
+          }
+        },
+        {
+          "name": "Update Assignment",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Updated Title\",\n  \"description\": \"Updated description\",\n  \"status\": \"published\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/assignments/{{assignmentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "assignments", "{{assignmentId}}"]
+            }
+          }
+        },
+        {
+          "name": "Publish Assignment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/assignments/{{assignmentId}}/publish",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "assignments", "{{assignmentId}}", "publish"]
+            }
+          }
+        },
+        {
+          "name": "Delete Assignment",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/assignments/{{assignmentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "assignments", "{{assignmentId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Submissions",
+      "item": [
+        {
+          "name": "Student Submit Assignment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"studentId\": \"student-uuid-here\",\n  \"answers\": [2, \"heart\", \"The respiratory system allows us to breathe.\"],\n  \"timeSpent\": 600,\n  \"deviceMetadata\": {\n    \"browser\": \"Chrome\",\n    \"os\": \"Windows\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/submissions/assignments/{{assignmentId}}/submit",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "submissions", "assignments", "{{assignmentId}}", "submit"]
+            }
+          }
+        },
+        {
+          "name": "List Submissions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/submissions/assignments/{{assignmentId}}/submissions?graded=false&studentName=John",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "submissions", "assignments", "{{assignmentId}}", "submissions"],
+            "query": [
+              {
+                "key": "graded",
+                "value": "false"
+              },
+              {
+                "key": "studentName",
+                "value": "John"
+              }
+            ]
+            }
+          }
+        },
+        {
+          "name": "Get Submission Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/submissions/:submissionId",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "submissions", ":submissionId"]
+            }
+          }
+        },
+        {
+          "name": "Grade Submission",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"score\": 18.5,\n  \"teacherComments\": \"Great work! Pay attention to the respiratory system details.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/submissions/:submissionId/grade",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "submissions", ":submissionId", "grade"]
+            }
+          }
+        },
+        {
+          "name": "Auto-Grade MCQs",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/submissions/assignments/{{assignmentId}}/autograde",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "submissions", "assignments", "{{assignmentId}}", "autograde"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Posts",
+      "item": [
+        {
+          "name": "Create Post",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Welcome to the class! Please review the syllabus.\",\n  \"pinned\": true,\n  \"visibility\": \"class\",\n  \"attachments\": []\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/posts/classrooms/{{classroomId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "posts", "classrooms", "{{classroomId}}"]
+            }
+          }
+        },
+        {
+          "name": "List Posts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/posts/classrooms/{{classroomId}}?search=welcome",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "posts", "classrooms", "{{classroomId}}"],
+            "query": [
+              {
+                "key": "search",
+                "value": "welcome"
+              }
+            ]
+            }
+          }
+        },
+        {
+          "name": "Update Post",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pinned\": false,\n  \"content\": \"Updated content\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/posts/:postId",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "posts", ":postId"]
+            }
+          }
+        },
+        {
+          "name": "Delete Post",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/posts/:postId",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "posts", ":postId"]
+            }
+          }
+        },
+        {
+          "name": "Add Comment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Great question!\",\n  \"userId\": \"{{teacherId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/posts/:postId/comments",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "posts", ":postId", "comments"]
+            }
+          }
+        },
+        {
+          "name": "Delete Comment",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-teacher-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/posts/:postId/comments/:commentId",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "posts", ":postId", "comments", ":commentId"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "Get Notifications",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-user-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications?read=false&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "notifications"],
+            "query": [
+              {
+                "key": "read",
+                "value": "false"
+              },
+              {
+                "key": "limit",
+                "value": "50"
+              }
+            ]
+            }
+          }
+        },
+        {
+          "name": "Mark as Read",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-user-id",
+                "value": "{{teacherId}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"notificationIds\": [\"notification-id-1\", \"notification-id-2\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/mark-read",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "notifications", "mark-read"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
+
+
+
+
+
+
+
