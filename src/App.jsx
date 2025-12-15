@@ -25,6 +25,8 @@ import ClassroomDetail from './pages/teacher/ClassroomDetail'
 import JoinClassroom from './pages/JoinClassroom'
 import ForSchools from './pages/ForSchools'
 import GroupActivationDashboard from './pages/admin/GroupActivationDashboard'
+import TestSecureV2 from './pages/TestSecureV2'
+import Lesson from './pages/Lesson'
 
 function App() {
   return (
@@ -47,6 +49,8 @@ function App() {
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/introduction" element={<Introduction />} />
         <Route path="/join-classroom" element={<JoinClassroom />} />
+        <Route path="/testsecurev2" element={<TestSecureV2 />} />
+        <Route path="/testsecurev2/lesson/:lessonId" element={<Lesson />} />
         <Route path="/dashboard" element={<Dashboard />}>
           <Route index element={<Home />} />
           <Route path="roadmap" element={<Roadmap />} />

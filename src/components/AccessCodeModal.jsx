@@ -83,6 +83,8 @@ const AccessCodeModal = ({ isOpen, onClose }) => {
       setShowUliInput(false)
     } else if (value === 'testsecure') {
       setShowUliInput(false)
+    } else if (value === 'testsecurev2') {
+      setShowUliInput(false)
     } else if (validAccessCodes.includes(value)) {
       setShowUliInput(true)
     } else if (showUliInput) {
@@ -140,6 +142,19 @@ const AccessCodeModal = ({ isOpen, onClose }) => {
       
       onClose()
       navigate('/introduction') // Go to intro instead of dashboard
+      
+      // Reset form
+      setAccessCode('')
+      setUli('')
+      setShowUliInput(false)
+      setError('')
+      return
+    }
+    
+    // Special testsecurev2 access code
+    if (accessCode === 'testsecurev2') {
+      onClose()
+      navigate('/testsecurev2')
       
       // Reset form
       setAccessCode('')
@@ -246,6 +261,13 @@ const AccessCodeModal = ({ isOpen, onClose }) => {
             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
               <p className="text-sm text-yellow-800">
                 <strong>Developer Test Mode:</strong> This will create a temporary session that doesn't save to the database. All data will be cleared when you log out.
+              </p>
+            </div>
+          )}
+          {accessCode === 'testsecurev2' && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+              <p className="text-sm text-green-800">
+                <strong>Test Secure V2:</strong> Access the new question type testing interface.
               </p>
             </div>
           )}
