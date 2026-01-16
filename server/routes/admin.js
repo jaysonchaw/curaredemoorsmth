@@ -5,12 +5,56 @@ const { supabase } = require('../lib/supabase');
 // Auto-initialization flag
 let initialized = false;
 
+// Security: Track failed admin attempts
+const failedAdminAttempts = new Map();
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
+
 // Middleware to verify admin (devsecure access)
 const verifyAdmin = async (req, res, next) => {
+  const clientId = req.ip || req.connection.remoteAddress;
   const adminKey = req.headers['x-admin-key'] || req.query.adminKey;
   
-  if (adminKey !== 'devsecure') {
+  // Check if IP is locked out
+  if (failedAdminAttempts.has(clientId)) {
+    const attemptData = failedAdminAttempts.get(clientId);
+    if (attemptData.lockedUntil > Date.now()) {
+      const remainingTime = Math.ceil((attemptData.lockedUntil - Date.now()) / 1000);
+      console.warn(`[SECURITY] Locked admin access attempt from IP: ${clientId}`);
+      return res.status(429).json({ 
+        error: 'Too many failed attempts. Please try again later.',
+        retryAfter: remainingTime
+      });
+    } else {
+      // Lockout expired, reset
+      failedAdminAttempts.delete(clientId);
+    }
+  }
+  
+  if (!adminKey || adminKey !== 'devsecure') {
+    // Track failed attempt
+    if (!failedAdminAttempts.has(clientId)) {
+      failedAdminAttempts.set(clientId, { count: 1, lockedUntil: 0 });
+    } else {
+      const attemptData = failedAdminAttempts.get(clientId);
+      attemptData.count++;
+      
+      if (attemptData.count >= MAX_FAILED_ATTEMPTS) {
+        attemptData.lockedUntil = Date.now() + LOCKOUT_DURATION;
+        console.warn(`[SECURITY] Admin access locked for IP: ${clientId} after ${MAX_FAILED_ATTEMPTS} failed attempts`);
+      }
+      
+      failedAdminAttempts.set(clientId, attemptData);
+    }
+    
+    // Log suspicious activity
+    console.warn(`[SECURITY] Failed admin access attempt from IP: ${clientId}`);
     return res.status(401).json({ error: 'Unauthorized - Admin access required' });
+  }
+  
+  // Successful authentication - reset failed attempts
+  if (failedAdminAttempts.has(clientId)) {
+    failedAdminAttempts.delete(clientId);
   }
   
   req.adminKey = adminKey;

@@ -1,11 +1,18 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { supabase } from '../../lib/supabase'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
+import { supabase } from '../../services/supabaseService'
 import ButtonTemplate from '../../components/ButtonTemplate'
+import { trackLessonDropOff, startSessionTracking, stopSessionTracking, trackRetention } from '../../utils/analyticsTracker'
+import { addCompletedLesson } from '../../services/progressService'
 
 const LessonPlayer = () => {
   const { lessonId } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
+  
+  // Check if this is practice mode (not personalized practice) or review
+  const isPracticeMode = location.pathname.includes('/practice') && !location.pathname.includes('/practice/')
+  const isReviewMode = location.pathname.includes('/review')
   const [lesson, setLesson] = useState(null)
   const [currentStep, setCurrentStep] = useState(0) // 0: content, 1: task, 2: follow-up, 3: quiz
   const [startTime, setStartTime] = useState(null)
@@ -27,8 +34,46 @@ const LessonPlayer = () => {
   const [quizAttempted, setQuizAttempted] = useState({}) // Track if quiz question was attempted (key: quizIndex, value: boolean)
   const [showRestartPrompt, setShowRestartPrompt] = useState(false) // Show restart prompt if score < 40
   const [showContentDropdown, setShowContentDropdown] = useState({}) // Track which content dropdowns are open
+  // New question type states
+  const [mixMatchState, setMixMatchState] = useState({}) // { questionKey: { selectedLeft, selectedRight, matchedPairs, attempts, warnedPairs, isSubmitted } }
+  const [progressionTimelineState, setProgressionTimelineState] = useState({}) // { questionKey: { timelineSlots, draggedItem, hoveredSlot, isSubmitted, attempts, slotStates } }
+  const [xpEarnedThisSession, setXpEarnedThisSession] = useState(0) // Track XP earned in current lesson session
 
   const isTestMode = sessionStorage.getItem('is_test_mode') === 'true'
+
+  useEffect(() => {
+    // Start session tracking
+    startSessionTracking()
+    // Track retention (daily visit)
+    trackRetention()
+    
+    return () => {
+      // Stop session tracking on unmount
+      stopSessionTracking()
+    }
+  }, [])
+
+  // Track drop-off when component unmounts without completion
+  useEffect(() => {
+    return () => {
+      // On unmount, if lesson wasn't completed, track drop-off and revoke XP
+      if (lesson && startTime && currentStep < 3 && !isPracticeMode && !isReviewMode) {
+        const stepNames = ['content', 'task', 'follow-up', 'quiz']
+        const timeSpent = Math.round((Date.now() - startTime) / 1000)
+        trackLessonDropOff(lesson.id, stepNames[currentStep] || 'unknown', timeSpent)
+        
+        // Revoke XP earned in this session if lesson wasn't completed
+        if (xpEarnedThisSession > 0) {
+          const today = new Date().toDateString()
+          import('../../services/progressService').then(({ subtractDailyXP }) => {
+            subtractDailyXP(today, xpEarnedThisSession).then(() => {
+              window.dispatchEvent(new CustomEvent('tsv2XPGained', { detail: { xp: -xpEarnedThisSession } }))
+            })
+          })
+        }
+      }
+    }
+  }, [lesson, startTime, currentStep, isPracticeMode, isReviewMode, xpEarnedThisSession])
 
   useEffect(() => {
     const fetchLesson = async () => {
@@ -44,24 +89,16 @@ const LessonPlayer = () => {
           .single()
 
         if (error) {
-          console.error('Error fetching lesson:', error)
           return
         }
 
         if (lessonData) {
-          // Ensure content structure is correct
           const content = lessonData.content || {}
           
-          // Handle both camelCase and snake_case key formats
           const tasks = Array.isArray(content.tasks) ? content.tasks : (Array.isArray(content.task) ? content.task : [])
           const followUps = Array.isArray(content.followUps) ? content.followUps : (Array.isArray(content.follow_ups) ? content.follow_ups : (Array.isArray(content.followups) ? content.followups : []))
           const quizData = content.quiz || {}
           const quizQuestions = Array.isArray(quizData.questions) ? quizData.questions : []
-          
-          // Validate question counts (only warn in development)
-          if (process.env.NODE_ENV === 'development' && (tasks.length === 1 || followUps.length === 1 || quizQuestions.length === 1)) {
-            console.warn('⚠️ Only 1 question found! Database may need to be updated with COMPLETE_ALL_46_LESSONS.sql')
-          }
           
           setLesson({
             id: lessonData.id,
@@ -75,44 +112,9 @@ const LessonPlayer = () => {
               quiz: { questions: quizQuestions }
             }
           })
-
-          // Track lesson start in user progress (skip in test mode)
-          if (!isTestMode) {
-            const { data: { session } } = await supabase.auth.getSession()
-            if (session) {
-              // Check if progress exists
-              const { data: existingProgress } = await supabase
-                .from('user_lesson_progress')
-                .select('id')
-                .eq('user_id', session.user.id)
-                .eq('lesson_id', lessonId)
-                .single()
-
-              if (!existingProgress) {
-                // Create new progress entry
-                await supabase
-                  .from('user_lesson_progress')
-                  .insert({
-                    user_id: session.user.id,
-                    lesson_id: lessonId,
-                    status: 'in_progress',
-                    started_at: new Date().toISOString()
-                  })
-              }
-
-              // Analytics: lesson_started
-              await supabase
-                .from('analytics')
-                .insert({
-                  user_id: session.user.id,
-                  event_type: 'lesson_started',
-                  lesson_id: lessonId
-                })
-            }
-          }
         }
       } catch (error) {
-        console.error('Error fetching lesson:', error)
+        // Silent fail
       }
     }
 
@@ -206,17 +208,29 @@ const LessonPlayer = () => {
     const timeSpent = Math.round((Date.now() - startTime) / 60000) // minutes
     const finalScore = score !== null ? score : (quizScore || 0)
     
-    // Calculate total XP
-    const totalXP = calculateTotalXP()
+    // Calculate total XP from correct answers
+    const correctAnswersXP = calculateTotalXP()
     
     // If XP < 40, show restart prompt
-    if (totalXP < 40) {
+    if (correctAnswersXP < 40) {
       setShowRestartPrompt(true)
       return
     }
     
     // Add 5 XP bonus on completion
-    const finalXP = totalXP + 5
+    const completionBonus = 5
+    const finalXP = correctAnswersXP + completionBonus
+    const totalXPEarned = finalXP
+    
+    // Track XP earned in this session (for potential revocation if quit early)
+    setXpEarnedThisSession(totalXPEarned)
+    
+    // Dispatch XP events
+    // Note: XP from correct questions should be dispatched per question, but for now we dispatch total
+    if (correctAnswersXP > 0) {
+      window.dispatchEvent(new CustomEvent('tsv2XPGained', { detail: { xp: correctAnswersXP } }))
+    }
+    window.dispatchEvent(new CustomEvent('tsv2XPGained', { detail: { xp: completionBonus } }))
     
     // In test mode, save to sessionStorage for unlocking
     if (isTestMode && lesson) {
@@ -228,13 +242,23 @@ const LessonPlayer = () => {
         score: finalScore,
         xp: finalXP,
         time_spent_minutes: timeSpent,
-        completed_at: new Date().toISOString()
+        completed_at: new Date().toISOString(),
       }
       
       if (existingIndex >= 0) {
         testProgress[existingIndex] = progressEntry
       } else {
         testProgress.push(progressEntry)
+      }
+      
+      // Only mark as completed and dispatch event if NOT practice mode or review mode
+      if (!isPracticeMode && !isReviewMode) {
+        try {
+          await addCompletedLesson(lesson.id)
+        } catch (error) {
+          console.error('[LessonPlayer] Test mode: Error saving lesson completion:', error)
+        }
+        window.dispatchEvent(new Event('tsv2LessonCompleted'))
       }
       
       // Update test user XP in sessionStorage
@@ -244,71 +268,34 @@ const LessonPlayer = () => {
       sessionStorage.setItem('test_user_data', JSON.stringify(testUserData))
       
       sessionStorage.setItem('test_lesson_progress', JSON.stringify(testProgress))
-      navigate('/dashboard/results')
+      navigate('/testsecurev2')
+      // Dispatch event after navigation for test mode
+      setTimeout(() => {
+        window.dispatchEvent(new Event('tsv2LessonCompleted'))
+      }, 200)
       return
     }
     
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (session && lesson) {
-        // Update user progress to completed with score and XP
-        await supabase
-          .from('user_lesson_progress')
-          .upsert({
-            user_id: session.user.id,
-            lesson_id: lesson.id,
-            status: 'completed',
-            score: finalScore,
-            xp: finalXP,
-            time_spent_minutes: timeSpent,
-            completed_at: new Date().toISOString()
-          }, {
-            onConflict: 'user_id,lesson_id'
-          })
-
-        // Time is already logged in user_lesson_progress.time_spent_minutes
-
-        // Analytics: lesson_completed
-        await supabase
-          .from('analytics')
-          .insert({
-            user_id: session.user.id,
-            event_type: 'lesson_completed',
-            lesson_id: lesson.id,
-            metadata: {
-              time_spent_minutes: timeSpent,
-              score: finalScore,
-              task_answers: taskAnswers,
-              followup_answers: followUpAnswers,
-              quiz_answers: quizAnswers
-            }
-          })
-
-        // Update user XP (calculated from tasks, follow-ups, quiz, + 5 bonus)
-        const { data: userData } = await supabase
-          .from('users')
-          .select('xp, level')
-          .eq('id', session.user.id)
-          .single()
-        
-        if (userData) {
-          const newXP = (userData.xp || 0) + finalXP
-          const newLevel = Math.floor(newXP / 100) + 1
-          
-          await supabase
-            .from('users')
-            .update({
-              xp: newXP,
-              level: newLevel
-            })
-            .eq('id', session.user.id)
+    // Only mark as completed and dispatch event if NOT practice mode or review mode
+    if (!isPracticeMode && !isReviewMode) {
+      try {
+        if (lesson) {
+          await addCompletedLesson(lesson.id)
+          // Dispatch event AFTER saving to ensure data is persisted
+          window.dispatchEvent(new Event('tsv2LessonCompleted'))
         }
+      } catch (error) {
+        console.error('[LessonPlayer] Non-test mode: Error saving lesson completion:', error)
       }
-    } catch (error) {
-      console.error('Error completing lesson:', error)
+    } else {
+      // Track drop-off for practice/review modes if not completed
+      if (lesson && startTime && currentStep < 3) {
+        const stepNames = ['content', 'task', 'follow-up', 'quiz']
+        const timeSpent = Math.round((Date.now() - startTime) / 1000)
+        trackLessonDropOff(lesson.id, stepNames[currentStep] || 'practice_or_review', timeSpent)
+      }
+      navigate('/testsecurev2')
     }
-    
-    navigate('/dashboard')
   }
 
   if (!lesson) {
@@ -444,7 +431,15 @@ const LessonPlayer = () => {
 
         <div className="mb-6">
           <button
-            onClick={() => navigate('/dashboard/roadmap')}
+            onClick={() => {
+              // Track drop-off if lesson not completed
+              if (lesson && currentStep < 3) {
+                const stepNames = ['content', 'task', 'follow-up', 'quiz']
+                const timeSpent = startTime ? Math.round((Date.now() - startTime) / 1000) : 0
+                trackLessonDropOff(lesson.id, stepNames[currentStep], timeSpent)
+              }
+              navigate('/testsecurev2')
+            }}
             className="text-sm text-gray-600 hover:text-curare-blue mb-4"
           >
             ← Back to Roadmap
@@ -590,7 +585,11 @@ const LessonPlayer = () => {
                 textAnswerAttempts,
                 setTextAnswerAttempts,
                 false, // isQuiz
-                false // isAttempted
+                false, // isAttempted
+                mixMatchState,
+                setMixMatchState,
+                progressionTimelineState,
+                setProgressionTimelineState
               )}
             </div>
             <div className="flex justify-between">
@@ -801,7 +800,11 @@ const LessonPlayer = () => {
                 textAnswerAttempts,
                 setTextAnswerAttempts,
                 false, // isQuiz
-                false // isAttempted
+                false, // isAttempted
+                mixMatchState,
+                setMixMatchState,
+                progressionTimelineState,
+                setProgressionTimelineState
               )}
               {followUpAnswers[currentFollowUpIndex] && (
                 <div className="mt-4 p-4 bg-blue-50 rounded-lg">
@@ -1078,7 +1081,11 @@ const LessonPlayer = () => {
                 textAnswerAttempts,
                 setTextAnswerAttempts,
                 true, // isQuiz - only one attempt allowed
-                quizAttempted[currentQuizIndex] || false // isAttempted
+                quizAttempted[currentQuizIndex] || false, // isAttempted
+                mixMatchState,
+                setMixMatchState,
+                progressionTimelineState,
+                setProgressionTimelineState
               )}
               
               {quizAnswers[currentQuizIndex] !== undefined && (
@@ -1276,7 +1283,7 @@ const LessonPlayer = () => {
                     
                     sessionStorage.setItem('test_lesson_progress', JSON.stringify(testProgress))
                     setShowRestartPrompt(false)
-                    navigate('/dashboard/results')
+                    navigate('/testsecurev2')
                     return
                   }
                   
@@ -1284,20 +1291,19 @@ const LessonPlayer = () => {
                     const { data: { session } } = await supabase.auth.getSession()
                     if (session && lesson) {
                       await supabase
-                        .from('user_lesson_progress')
+                        .from('user_progress')
                         .upsert({
                           user_id: session.user.id,
                           lesson_id: lesson.id,
-                          status: 'completed',
+                          completed: true,  // Use completed boolean (table schema)
+                          status: 'completed',  // Keep for backward compatibility if column exists
                           score: finalScore,
                           xp: finalXP,
                           time_spent_minutes: timeSpent,
-                          completed_at: new Date().toISOString()
-                        }, {
-                          onConflict: 'user_id,lesson_id'
+                          completed_at: new Date().toISOString(),
                         })
 
-                      // Time is already logged in user_lesson_progress.time_spent_minutes
+                      // Time is already logged in user_progress.time_spent_minutes
 
                       await supabase
                         .from('analytics')
@@ -1338,7 +1344,7 @@ const LessonPlayer = () => {
                   }
                   
                   setShowRestartPrompt(false)
-                  navigate('/dashboard')
+                  navigate('/testsecurev2')
                 }}
                 className="flex-1 px-4 py-2 bg-curare-blue text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
               >
@@ -1353,10 +1359,11 @@ const LessonPlayer = () => {
 }
 
 // Helper function to render questions by type
-const renderQuestionByType = (question, questionIndex, answerState, setAnswerState, dragDropOrder, setDragDropOrder, textAnswerEvaluations, setTextAnswerEvaluations, textAnswerAttempts, setTextAnswerAttempts, isQuiz = false, isAttempted = false) => {
+const renderQuestionByType = (question, questionIndex, answerState, setAnswerState, dragDropOrder, setDragDropOrder, textAnswerEvaluations, setTextAnswerEvaluations, textAnswerAttempts, setTextAnswerAttempts, isQuiz = false, isAttempted = false, mixMatchState = {}, setMixMatchState = () => {}, progressionTimelineState = {}, setProgressionTimelineState = () => {}) => {
   if (!question) return null
 
   const questionType = question.type || question.questionFormat || 'multiple_choice'
+  const questionKey = `question-${questionIndex}`
   const showResult = questionType === 'text_answer' || questionType === 'fill_in_blank'
     ? textAnswerEvaluations[questionIndex] !== undefined || answerState[questionIndex] !== undefined
     : answerState[questionIndex] !== undefined
@@ -1763,6 +1770,593 @@ const renderQuestionByType = (question, questionIndex, answerState, setAnswerSta
           >
             Try Again ({maxAttempts - attempts.count} attempts remaining)
           </button>
+        )}
+      </div>
+    )
+  }
+
+  // Mix & Match question type
+  if (questionType === 'mix_match') {
+    const isLightMode = localStorage.getItem('tsv2LightMode') === 'true'
+    const state = mixMatchState[questionKey] || { selectedLeft: null, selectedRight: null, matchedPairs: [], attempts: 0, warnedPairs: [], isSubmitted: false }
+    const { selectedLeft, selectedRight, matchedPairs, attempts, warnedPairs, isSubmitted } = state
+    
+    const leftItems = question.left_items || []
+    const rightItems = question.right_items || []
+    const correctPairs = question.correct_pairs || [] // Array of {left: index, right: index}
+    
+    // Check if all pairs are matched
+    const allMatched = matchedPairs.length === leftItems.length
+    
+    // Handle selection
+    const handleItemClick = (side, index) => {
+      if (isSubmitted && allMatched) return
+      
+      const updateState = (updates) => {
+        setMixMatchState({ ...mixMatchState, [questionKey]: { ...state, ...updates } })
+      }
+      
+      if (side === 'left') {
+        if (selectedLeft === index) {
+          updateState({ selectedLeft: null })
+        } else {
+          const newSelectedLeft = index
+          updateState({ selectedLeft: newSelectedLeft })
+          // If right is selected, try to match
+          if (selectedRight !== null) {
+            checkMatch(newSelectedLeft, selectedRight, updateState)
+          }
+        }
+      } else {
+        if (selectedRight === index) {
+          updateState({ selectedRight: null })
+        } else {
+          const newSelectedRight = index
+          updateState({ selectedRight: newSelectedRight })
+          // If left is selected, try to match
+          if (selectedLeft !== null) {
+            checkMatch(selectedLeft, newSelectedRight, updateState)
+          }
+        }
+      }
+    }
+    
+    const checkMatch = (leftIdx, rightIdx, updateState) => {
+      const isCorrect = correctPairs.some(pair => pair.left === leftIdx && pair.right === rightIdx)
+      
+      if (isCorrect) {
+        // Correct match
+        const newMatchedPairs = [...matchedPairs, { left: leftIdx, right: rightIdx }]
+        updateState({ 
+          matchedPairs: newMatchedPairs,
+          selectedLeft: null,
+          selectedRight: null,
+          warnedPairs: warnedPairs.filter(p => !(p.left === leftIdx && p.right === rightIdx))
+        })
+      } else {
+        // Wrong match
+        const newAttempts = attempts + 1
+        const newWarnedPairs = (newAttempts === 1 || newAttempts === 2) 
+          ? [...warnedPairs, { left: leftIdx, right: rightIdx }]
+          : warnedPairs
+        
+        updateState({
+          attempts: newAttempts,
+          warnedPairs: newWarnedPairs,
+          selectedLeft: null,
+          selectedRight: null,
+          isSubmitted: newAttempts >= 3
+        })
+      }
+    }
+    
+    const getBoxVariant = (side, index) => {
+      const isMatched = matchedPairs.some(p => (side === 'left' ? p.left : p.right) === index)
+      const isSelected = (side === 'left' ? selectedLeft : selectedRight) === index
+      const isWarned = warnedPairs.some(p => (side === 'left' ? p.left : p.right) === index)
+      
+      if (isMatched) return 'correct'
+      if (isWarned && attempts >= 3) return 'wrong'
+      if (isWarned) return 'warned'
+      if (isSelected) return 'selected'
+      return 'default'
+    }
+    
+    const getBoxSrc = (variant, isLight) => {
+      const lightSuffix = isLight ? '(light)' : ''
+      const variants = {
+        default: `/newboxdefault${lightSuffix}.svg`,
+        selected: `/newboxselected${lightSuffix}.svg`,
+        warned: `/newboxwarned${lightSuffix}.svg`,
+        wrong: `/newboxwrong${lightSuffix}.svg`,
+        correct: `/newboxcorrect${lightSuffix}.svg`
+      }
+      return variants[variant] || variants.default
+    }
+    
+    return (
+      <div className="space-y-6">
+        <p className="text-sm text-gray-600 mb-4">Match the items from the left column to the right column:</p>
+        <div className="flex gap-8 justify-center">
+          {/* Left Column */}
+          <div className="flex flex-col gap-4">
+            {leftItems.map((item, index) => {
+              const variant = getBoxVariant('left', index)
+              const isMatched = matchedPairs.some(p => p.left === index)
+              return (
+                <div
+                  key={`left-${index}`}
+                  onClick={() => !isMatched && handleItemClick('left', index)}
+                  style={{
+                    cursor: isMatched ? 'default' : 'pointer',
+                    width: '200px',
+                    height: 'auto',
+                    position: 'relative'
+                  }}
+                >
+                  <img
+                    src={getBoxSrc(variant, isLightMode)}
+                    alt={`Left item ${index + 1}`}
+                    style={{ width: '200px', height: 'auto', display: 'block' }}
+                  />
+                  <div style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    fontFamily: "'Inter Tight', sans-serif",
+                    fontSize: '16px',
+                    color: isLightMode ? '#000000' : '#ffffff',
+                    textAlign: 'center',
+                    pointerEvents: 'none',
+                    width: '90%'
+                  }}>
+                    {item}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          
+          {/* Right Column */}
+          <div className="flex flex-col gap-4">
+            {rightItems.map((item, index) => {
+              const variant = getBoxVariant('right', index)
+              const isMatched = matchedPairs.some(p => p.right === index)
+              return (
+                <div
+                  key={`right-${index}`}
+                  onClick={() => !isMatched && handleItemClick('right', index)}
+                  style={{
+                    cursor: isMatched ? 'default' : 'pointer',
+                    width: '200px',
+                    height: 'auto',
+                    position: 'relative'
+                  }}
+                >
+                  <img
+                    src={getBoxSrc(variant, isLightMode)}
+                    alt={`Right item ${index + 1}`}
+                    style={{ width: '200px', height: 'auto', display: 'block' }}
+                  />
+                  <div style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    fontFamily: "'Inter Tight', sans-serif",
+                    fontSize: '16px',
+                    color: isLightMode ? '#000000' : '#ffffff',
+                    textAlign: 'center',
+                    pointerEvents: 'none',
+                    width: '90%'
+                  }}>
+                    {item}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+        
+        {isSubmitted && attempts >= 3 && (
+          <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-sm font-medium text-red-800">
+              ✗ Incorrect after 3 attempts. Question skipped.
+            </p>
+            <button
+              onClick={() => {
+                setAnswerState({ ...answerState, [questionIndex]: matchedPairs })
+              }}
+              className="mt-2 w-full px-4 py-2 bg-curare-blue text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+            >
+              Continue
+            </button>
+          </div>
+        )}
+        
+        {allMatched && !isSubmitted && (
+          <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+            <p className="text-sm font-medium text-green-800">
+              ✓ All matches correct!
+            </p>
+          </div>
+        )}
+        
+        {allMatched && !isSubmitted && (
+          <button
+            onClick={() => {
+              setAnswerState({ ...answerState, [questionIndex]: matchedPairs })
+            }}
+            className="w-full px-4 py-2 bg-curare-blue text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+          >
+            Continue
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  // Progression Timeline question type
+  if (questionType === 'progression_timeline') {
+    const isLightMode = localStorage.getItem('tsv2LightMode') === 'true'
+    const state = progressionTimelineState[questionKey] || { 
+      timelineSlots: [null, null, null, null], 
+      draggedItem: null, 
+      hoveredSlot: null, 
+      isSubmitted: false, 
+      attempts: 0, 
+      slotStates: ['unselected', 'unselected', 'unselected', 'unselected'] 
+    }
+    const { timelineSlots, draggedItem, hoveredSlot, isSubmitted, attempts, slotStates } = state
+    
+    const items = question.items || []
+    const correctOrder = question.correct_order || [] // Array of indices [0, 1, 2, 3]
+    
+    const updateState = (updates) => {
+      setProgressionTimelineState({ ...progressionTimelineState, [questionKey]: { ...state, ...updates } })
+    }
+    
+    const handleDragStart = (e, itemIndex) => {
+      updateState({ draggedItem: itemIndex })
+      e.dataTransfer.effectAllowed = 'move'
+    }
+    
+    const handleDragOver = (e, slotIndex) => {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      updateState({ hoveredSlot: slotIndex })
+    }
+    
+    const handleDragLeave = () => {
+      updateState({ hoveredSlot: null })
+    }
+    
+    const handleDrop = (e, slotIndex) => {
+      e.preventDefault()
+      if (draggedItem === null) return
+      
+      const newSlots = [...timelineSlots]
+      // Remove item from previous slot if it exists
+      const prevSlot = newSlots.findIndex(slot => slot === draggedItem)
+      if (prevSlot !== -1) {
+        newSlots[prevSlot] = null
+      }
+      // Place in new slot
+      newSlots[slotIndex] = draggedItem
+      
+      // Update slot state to default
+      const newStates = [...slotStates]
+      newStates[slotIndex] = 'default'
+      
+      updateState({ 
+        timelineSlots: newSlots,
+        slotStates: newStates,
+        draggedItem: null,
+        hoveredSlot: null
+      })
+    }
+    
+    const handleSubmit = () => {
+      const newAttempts = attempts + 1
+      const newStates = timelineSlots.map((item, index) => {
+        if (item === null) return 'unselected'
+        const correctItem = correctOrder[index]
+        if (item === correctItem) return 'correct'
+        return newAttempts === 1 ? 'warned' : 'wrong'
+      })
+      updateState({ 
+        isSubmitted: true,
+        attempts: newAttempts,
+        slotStates: newStates
+      })
+    }
+    
+    const allSlotsFilled = timelineSlots.every(slot => slot !== null)
+    const isCorrect = timelineSlots.every((item, index) => item === correctOrder[index])
+    
+    const getSlotSrc = (state, isLight) => {
+      const lightSuffix = isLight ? '(light)' : ''
+      if (state === 'unselected') return `/newboxunselected${lightSuffix}.svg`
+      if (state === 'default') return `/newboxdefault${lightSuffix}.svg`
+      if (state === 'correct') return `/newboxcorrect${lightSuffix}.svg`
+      if (state === 'warned') return `/newboxwarned${lightSuffix}.svg`
+      if (state === 'wrong') return `/newboxwrong${lightSuffix}.svg`
+      return `/newboxunselected${lightSuffix}.svg`
+    }
+    
+    return (
+      <div className="space-y-6">
+        <p className="text-sm text-gray-600 mb-4">Drag the items below into the correct order:</p>
+        
+        {/* Timeline Slots */}
+        <div className="flex justify-center gap-4">
+          {timelineSlots.map((item, index) => {
+            const slotState = slotStates[index]
+            const isHovered = hoveredSlot === index && draggedItem !== null
+            return (
+              <div
+                key={`slot-${index}`}
+                onDragOver={(e) => handleDragOver(e, index)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, index)}
+                style={{
+                  width: '200px',
+                  height: 'auto',
+                  position: 'relative',
+                  border: isHovered ? '2px dashed #2563eb' : 'none',
+                  borderRadius: '8px',
+                  padding: isHovered ? '4px' : '0'
+                }}
+              >
+                <img
+                  src={getSlotSrc(slotState, isLightMode)}
+                  alt={`Timeline slot ${index + 1}`}
+                  style={{ width: '200px', height: 'auto', display: 'block' }}
+                />
+                {item !== null && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    fontFamily: "'Inter Tight', sans-serif",
+                    fontSize: '16px',
+                    color: isLightMode ? '#000000' : '#ffffff',
+                    textAlign: 'center',
+                    pointerEvents: 'none',
+                    width: '90%'
+                  }}>
+                    {items[item]}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+        
+        {/* Draggable Items */}
+        <div className="flex justify-center gap-4">
+          {items.map((item, index) => {
+            const isPlaced = timelineSlots.includes(index)
+            return (
+              <div
+                key={`item-${index}`}
+                draggable={!isPlaced && !isSubmitted}
+                onDragStart={(e) => !isPlaced && handleDragStart(e, index)}
+                style={{
+                  width: '200px',
+                  height: 'auto',
+                  cursor: isPlaced || isSubmitted ? 'default' : 'grab',
+                  opacity: isPlaced ? 0.5 : 1,
+                  position: 'relative'
+                }}
+              >
+                <img
+                  src={`/newboxdefault${isLightMode ? '(light)' : ''}.svg`}
+                  alt={`Item ${index + 1}`}
+                  style={{ width: '200px', height: 'auto', display: 'block' }}
+                />
+                <div style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  fontFamily: "'Inter Tight', sans-serif",
+                  fontSize: '16px',
+                  color: isLightMode ? '#000000' : '#ffffff',
+                  textAlign: 'center',
+                  pointerEvents: 'none',
+                  width: '90%'
+                }}>
+                  {item}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        
+        {isSubmitted && (
+          <div className={`p-4 rounded-lg ${
+            isCorrect && attempts === 1
+              ? 'bg-green-50 border border-green-200'
+              : attempts === 1
+              ? 'bg-yellow-50 border border-yellow-200'
+              : 'bg-red-50 border border-red-200'
+          }`}>
+            <p className={`text-sm font-medium ${
+              isCorrect && attempts === 1
+                ? 'text-green-800'
+                : attempts === 1
+                ? 'text-yellow-800'
+                : 'text-red-800'
+            }`}>
+              {isCorrect && attempts === 1
+                ? '✓ Correct order!'
+                : attempts === 1
+                ? '⚠ Not quite right. Try again.'
+                : '✗ Incorrect order.'}
+            </p>
+          </div>
+        )}
+        
+        {allSlotsFilled && !isSubmitted && (
+          <button
+            onClick={handleSubmit}
+            className="w-full px-4 py-2 bg-curare-blue text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+          >
+            Submit
+          </button>
+        )}
+        
+        {isSubmitted && (
+          <button
+            onClick={() => {
+              setAnswerState({ ...answerState, [questionIndex]: timelineSlots })
+            }}
+            className="w-full px-4 py-2 bg-curare-blue text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+          >
+            Continue
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  // Short Answer Yourself question type
+  if (questionType === 'short_answer_yourself') {
+    const isLightMode = localStorage.getItem('tsv2LightMode') === 'true'
+    const answerValue = answerState[questionIndex] || ''
+    const evaluation = textAnswerEvaluations[questionIndex]
+    const attempts = textAnswerAttempts[questionIndex] || { count: 0, wrongAnswers: [] }
+    const maxAttempts = 2
+    const isLocked = evaluation && !evaluation.isCorrect && attempts.count >= maxAttempts
+    const canRetry = evaluation && !evaluation.isCorrect && attempts.count < maxAttempts
+    
+    const handleSubmit = async () => {
+      const answer = answerValue
+      const isCorrect = await evaluateTextAnswer(question.question, answer, question)
+      const feedback = generateFeedback(question.question, answer, isCorrect)
+      
+      const newEvaluations = { 
+        ...textAnswerEvaluations, 
+        [questionIndex]: { isCorrect, answer, feedback } 
+      }
+      setTextAnswerEvaluations(newEvaluations)
+      
+      setTextAnswerAttempts({
+        ...textAnswerAttempts,
+        [questionIndex]: {
+          count: attempts.count + 1,
+          wrongAnswers: isCorrect ? [] : [...attempts.wrongAnswers, { answer, feedback }]
+        }
+      })
+      setAnswerState({ ...answerState, [questionIndex]: answer })
+    }
+    
+    return (
+      <div className="space-y-4">
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px'
+        }}>
+          <div style={{
+            width: '100%',
+            height: '2px',
+            backgroundColor: isLightMode ? '#d0d1d2' : '#3b4652'
+          }} />
+          <div style={{
+            width: '100%',
+            height: '2px',
+            backgroundColor: isLightMode ? '#d0d1d2' : '#3b4652'
+          }} />
+        </div>
+        
+        <input
+          type="text"
+          value={answerValue}
+          onChange={(e) => {
+            const newValue = e.target.value
+            // Limit to 2 lines (approximately 100 characters per line)
+            if (newValue.length <= 200) {
+              setAnswerState({ ...answerState, [questionIndex]: newValue })
+            }
+          }}
+          style={{
+            width: '100%',
+            padding: '8px 0',
+            border: 'none',
+            borderBottom: `2px solid ${isLightMode ? '#d0d1d2' : '#3b4652'}`,
+            fontFamily: "'Inter Tight', sans-serif",
+            fontSize: '16px',
+            color: isLightMode ? '#000000' : '#ffffff',
+            backgroundColor: 'transparent',
+            outline: 'none'
+          }}
+          placeholder="Type your answer here..."
+          disabled={isLocked || (evaluation && evaluation.isCorrect)}
+          maxLength={200}
+        />
+        
+        {!evaluation && answerValue.trim() && !isLocked && (
+          <button
+            onClick={handleSubmit}
+            className="w-full px-4 py-2 bg-curare-blue text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+          >
+            Submit Answer
+          </button>
+        )}
+        
+        {canRetry && (
+          <button
+            onClick={handleSubmit}
+            className="w-full px-4 py-2 bg-yellow-500 text-white rounded-lg font-medium hover:bg-yellow-600 transition-colors"
+          >
+            Try Again ({maxAttempts - attempts.count} attempts remaining)
+          </button>
+        )}
+        
+        {evaluation && (
+          <div className={`p-4 rounded-lg border-2 ${
+            evaluation.isCorrect 
+              ? 'bg-green-50 border-green-200' 
+              : isLocked
+              ? 'bg-red-50 border-red-200'
+              : 'bg-yellow-50 border-yellow-200'
+          }`}>
+            <div className="flex items-start gap-2">
+              <span className={`text-xl ${
+                evaluation.isCorrect 
+                  ? 'text-green-600' 
+                  : isLocked
+                  ? 'text-red-600'
+                  : 'text-yellow-600'
+              }`}>
+                {evaluation.isCorrect ? '✓' : isLocked ? '✗' : '⚠'}
+              </span>
+              <div className="flex-1">
+                <p className={`font-medium ${
+                  evaluation.isCorrect 
+                    ? 'text-green-800' 
+                    : isLocked
+                    ? 'text-red-800'
+                    : 'text-yellow-800'
+                }`}>
+                  {evaluation.isCorrect 
+                    ? 'Correct!' 
+                    : isLocked
+                    ? 'Incorrect after 2 attempts'
+                    : `Not quite right (Attempt ${attempts.count}/${maxAttempts})`}
+                </p>
+                {!evaluation.isCorrect && !isLocked && (
+                  <p className="text-sm text-yellow-700 mt-1">
+                    {evaluation.feedback?.whyIncorrect || 'Review the lesson content and try again.'}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
         )}
       </div>
     )

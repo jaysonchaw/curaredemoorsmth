@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useLayoutEffect, useImperativeHandle, forwardRef } from 'react'
 import { getLessonMetadata } from '../data/lessons/lessonLoader'
+import LessonContent from '../components/LessonContent'
 
 // Function to calculate time since last update
 const getLastUpdatedText = (lastUpdatedTimestamp) => {
@@ -24,7 +25,7 @@ const getLastUpdatedText = (lastUpdatedTimestamp) => {
   }
 }
 
-const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransitioning, shouldShowNext, questionData, questionIndex, correctAnswersCount = 0, lastThreeQuestions = ['pending', 'pending', 'pending'], onQuit, lessonId = 1 }, ref) => {
+const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, onAnswerResult, isInTransition, isTransitioning, shouldShowNext, questionData, questionIndex, correctAnswersCount = 0, answeredCount = 0, lastThreeQuestions = ['pending', 'pending', 'pending'], onQuit, lessonId = 1, totalQuestions = 9, isPracticeMode = false, practiceProgress = 0, showContentButton = true, isReviewOrSkipQuiz = false, isLightMode = false, isPersonalizedPractice = false }, ref) => {
   const contentRef = useRef(null)
   
   // Calculate transform based on current state
@@ -87,6 +88,9 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
         if (onCorrectAnswer) {
           onCorrectAnswer()
         }
+        // Dispatch XP event: 2 XP for practice mode, 5 XP for personalized practice or regular lessons
+        const xpAmount = (isPracticeMode && !isPersonalizedPractice) ? 2 : 5
+        window.dispatchEvent(new CustomEvent('tsv2XPGained', { detail: { xp: xpAmount } }))
         setShowGleamOverlay(true)
         setTimeout(() => {
           setShowGleamOverlay(false)
@@ -116,8 +120,8 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
   
   const [selectedCard, setSelectedCard] = useState(null)
   const [questionState, setQuestionState] = useState('active') // 'active', 'warned', 'wrong', 'correct'
-  // First 6 questions get 2 attempts (lives = 2), rest get 1 attempt (lives = 1)
-  const [lives, setLives] = useState(questionIndex < 6 ? 2 : 1)
+  // Reviews and skip quizzes: always 1 attempt. Regular lessons: First 6 questions get 2 attempts (lives = 2), rest get 1 attempt (lives = 1)
+  const [lives, setLives] = useState(isReviewOrSkipQuiz ? 1 : (questionIndex < 6 ? 2 : 1))
   const [cardStates, setCardStates] = useState(() => getInitialCardStates())
   const [hoveredCard, setHoveredCard] = useState(null)
   const [hoveredIcon, setHoveredIcon] = useState(null) // 'book' or 'flag'
@@ -158,15 +162,19 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
     somethingElse: false
   })
   const [flagOtherText, setFlagOtherText] = useState('')
+  const [hasReportedAnswer, setHasReportedAnswer] = useState(false)
 
   const getCardImage = (cardType, state) => {
+    // Append "(light)" to filename if light mode is on
+    const lightSuffix = isLightMode ? '(light)' : ''
+    
     // If mouse is held down, show pressed state
     if (pressedCard === cardType && questionState === 'active') {
-      return `/${cardType}pressed.svg`
+      return `/${cardType}pressed${lightSuffix}.svg`
     }
     // If hovering and in default state, show hover
     if (hoveredCard === cardType && state === 'default' && questionState === 'active') {
-      return `/${cardType}hover.svg`
+      return `/${cardType}hover${lightSuffix}.svg`
     }
     const stateMap = {
       'default': 'default',
@@ -176,7 +184,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
       'wrong': 'wrong',
       'correct': 'correct'
     }
-    const imagePath = `/${cardType}${stateMap[state] || 'default'}.svg`
+    const imagePath = `/${cardType}${stateMap[state] || 'default'}${lightSuffix}.svg`
     return imagePath
   }
 
@@ -222,31 +230,35 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
 
     const correctAnswer = questionData?.correctAnswer || 'bone'
     if (selectedCard === correctAnswer) {
-      // Correct answer
-        setCardStates(prev => ({ ...prev, [selectedCard]: 'correct' }))
+      setCardStates(prev => ({ ...prev, [selectedCard]: 'correct' }))
       setQuestionState('correct')
-        // Notify parent to update progress bar immediately
-        if (onCorrectAnswer) {
-          onCorrectAnswer()
-        }
-        // Show gleam overlay animation
-        setShowGleamOverlay(true)
-        // Remove after 480ms (0.48 seconds - one loop)
-        setTimeout(() => {
-          setShowGleamOverlay(false)
-        }, 480)
+      if (!hasReportedAnswer) {
+        if (onAnswerResult) onAnswerResult('correct')
+        if (onCorrectAnswer) onCorrectAnswer()
+        // Dispatch XP event: 2 XP for practice mode, 5 XP for personalized practice or regular lessons
+        const xpAmount = (isPracticeMode && !isPersonalizedPractice) ? 2 : 5
+        window.dispatchEvent(new CustomEvent('tsv2XPGained', { detail: { xp: xpAmount } }))
+        setHasReportedAnswer(true)
+      }
+      setShowGleamOverlay(true)
+      setTimeout(() => {
+        setShowGleamOverlay(false)
+      }, 480)
     } else {
-      // Wrong answer
-      if (lives === 2) {
-        // First wrong attempt (only for first 6 questions)
-        setCardStates(prev => ({ ...prev, [selectedCard]: 'warned' }))
-        setQuestionState('warned')
-        setLives(1)
-      } else {
-        // Second wrong attempt (or first attempt for questions after 6)
+      // Reviews and skip quizzes: no warned state, go straight to wrong
+      if (isReviewOrSkipQuiz || lives === 1) {
         setCardStates(prev => ({ ...prev, [selectedCard]: 'wrong' }))
         setQuestionState('wrong')
         setLives(0)
+        if (!hasReportedAnswer) {
+          if (onAnswerResult) onAnswerResult('wrong')
+          setHasReportedAnswer(true)
+        }
+      } else {
+        // Regular lessons: first wrong answer shows warned state
+        setCardStates(prev => ({ ...prev, [selectedCard]: 'warned' }))
+        setQuestionState('warned')
+        setLives(1)
       }
     }
   }
@@ -271,8 +283,9 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
     setCardStates(getInitialCardStates())
     setQuestionState('active')
     setSelectedCard(null)
-    // First 6 questions get 2 attempts, rest get 1 attempt
-    setLives(questionIndex < 6 ? 2 : 1)
+  setHasReportedAnswer(false)
+    // Reviews and skip quizzes: always 1 attempt. Regular lessons: First 6 questions get 2 attempts, rest get 1 attempt
+    setLives(isReviewOrSkipQuiz ? 1 : (questionIndex < 6 ? 2 : 1))
   }
 
   const handleFlagClick = () => {
@@ -298,15 +311,47 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
   }
 
   const handleFlagSubmit = () => {
-    // Handle flag submission here
-    console.log('Flag reasons:', flagReasons)
-    console.log('Other text:', flagOtherText)
+    // Track flagged question if analytics enabled
+    if (flagReasons.inaccurate || flagReasons.harmful || flagReasons.technical || flagReasons.somethingElse) {
+      const reasons = []
+      if (flagReasons.inaccurate) reasons.push('inaccurate')
+      if (flagReasons.harmful) reasons.push('harmful')
+      if (flagReasons.technical) reasons.push('technical')
+      if (flagReasons.somethingElse) reasons.push('somethingElse')
+      
+      // Import and track
+      import('../utils/analyticsTracker').then(({ trackFlaggedQuestion }) => {
+        trackFlaggedQuestion(lessonId, questionIndex, reasons.join(', '))
+      }).catch(() => {
+        // Silently fail if analytics not available
+      })
+    }
+    
     handleFlagClose()
   }
 
   const handleBookClick = () => {
     setIsBookContentOpen(!isBookContentOpen)
   }
+
+  // Load bookmark state from localStorage on mount and when lessonId changes
+  useEffect(() => {
+    const bookmarkKey = `bookmark_lesson_${lessonId}`
+    const savedBookmark = localStorage.getItem(bookmarkKey)
+    if (savedBookmark === 'true') {
+      setIsBookmarkSelected(true)
+    }
+  }, [lessonId])
+
+  // Save bookmark state to localStorage when it changes
+  useEffect(() => {
+    const bookmarkKey = `bookmark_lesson_${lessonId}`
+    if (isBookmarkSelected) {
+      localStorage.setItem(bookmarkKey, 'true')
+    } else {
+      localStorage.removeItem(bookmarkKey)
+    }
+  }, [isBookmarkSelected, lessonId])
 
   // Reset state when questionData changes
   useEffect(() => {
@@ -318,11 +363,12 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
       setCardStates(newCardStates)
       setSelectedCard(null)
       setQuestionState('active')
-      // First 6 questions get 2 attempts, rest get 1 attempt
-      setLives(questionIndex < 6 ? 2 : 1)
+      // Reviews and skip quizzes: always 1 attempt. Regular lessons: First 6 questions get 2 attempts, rest get 1 attempt
+      setLives(isReviewOrSkipQuiz ? 1 : (questionIndex < 6 ? 2 : 1))
       setShowGleamOverlay(false)
       setPressedCard(null)
       setHoveredCard(null)
+      setHasReportedAnswer(false)
     } else {
       // Fallback if questionData is not available yet
       setCardStates({ bone: 'default', muscle: 'default', heart: 'default' })
@@ -343,36 +389,56 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
 
   const getSubmitButtonImage = () => {
     const pressed = isButtonPressed ? 'pressed' : ''
+    const lightSuffix = isLightMode ? '(light)' : ''
     let path = ''
     if (questionState === 'active') {
       if (!canSubmit) {
-        path = `/submitunselected${pressed}.svg`
+        path = `/submitunselected${pressed}${lightSuffix}.svg`
       } else {
-        path = `/submitselected${pressed}.svg`
+        path = `/submitselected${pressed}${lightSuffix}.svg`
       }
     } else if (questionState === 'warned') {
-      path = `/submitwarned${pressed}.svg`
+      path = `/submitwarned${pressed}${lightSuffix}.svg`
     } else if (questionState === 'wrong') {
-      path = `/submitwrong${pressed}.svg`
+      path = `/submitwrong${pressed}${lightSuffix}.svg`
     } else if (questionState === 'correct') {
       // Original button stays as submitselected when correct
-      path = `/submitselected${pressed}.svg`
+      path = `/submitselected${pressed}${lightSuffix}.svg`
     } else {
-      path = `/submitunselected${pressed}.svg`
+      path = `/submitunselected${pressed}${lightSuffix}.svg`
     }
     return path
   }
 
-  const getDuplicateButtonImage = () => {
+  const getContinueButtonImage = () => {
     const pressed = isButtonPressed ? 'pressed' : ''
-    return `/submitcorrect${pressed}(new).svg`
+    const lightSuffix = isLightMode ? '(light)' : ''
+    return `/submitcorrect${pressed}${lightSuffix}.svg`
   }
 
-  // Calculate progress bar width (1/6 for first 6 questions)
-  const progressWidth = Math.min(correctAnswersCount, 6) / 6 * 100
+  const getDuplicateButtonImage = () => {
+    const pressed = isButtonPressed ? 'pressed' : ''
+    const lightSuffix = isLightMode ? '(light)' : ''
+    return `/submitcorrect${pressed}(new)${lightSuffix}.svg`
+  }
+
+  // Calculate progress bar width
+  let progressWidth
+  if (isPracticeMode) {
+    // Practice mode: use practiceProgress (0-1) converted to percentage
+    progressWidth = Math.min(practiceProgress * 100, 100)
+  } else if (isReviewOrSkipQuiz) {
+    // Review/Skip quiz mode: based on answered count / total questions (updates smoothly as questions are answered)
+    progressWidth = (answeredCount / totalQuestions) * 100
+  } else {
+    // Regular lesson mode: based on answered questions (first 6 fill bar)
+    const primaryTotal = 6
+    const answeredPrimary = Math.min(answeredCount || 0, primaryTotal)
+    progressWidth = (answeredPrimary / primaryTotal) * 100
+  }
 
   return (
-    <div style={{ backgroundColor: '#161d25', minHeight: '100vh', position: 'relative', overflow: 'hidden' }}>
+    <div style={{ backgroundColor: isLightMode ? '#ffffff' : '#161d25', minHeight: '100vh', position: 'relative', overflow: 'hidden' }}>
       {/* Darkening Overlay - Flag Modal */}
       <div
         onClick={handleFlagClose}
@@ -417,7 +483,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
             width: '45vw',
             maxWidth: '500px',
             aspectRatio: '3 / 4',
-            backgroundColor: '#161d25',
+            backgroundColor: isLightMode ? '#ffffff' : '#161d25',
             borderRadius: '12px',
             zIndex: 1000003,
             boxShadow: '0 10px 40px rgba(0, 0, 0, 0.5)',
@@ -448,7 +514,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
               right: '16px',
               background: 'transparent',
               border: 'none',
-              color: 'white',
+              color: isLightMode ? '#000000' : 'white',
               fontSize: '24px',
               cursor: 'pointer',
               padding: 0,
@@ -462,7 +528,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
             fontFamily: "'Inter Tight', sans-serif",
             fontSize: '12px',
             fontWeight: 700,
-            color: 'white',
+            color: isLightMode ? '#000000' : 'white',
             textTransform: 'uppercase',
             marginBottom: '16px',
             letterSpacing: '0.5px'
@@ -473,21 +539,26 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
             fontFamily: 'Helvetica, Arial, sans-serif',
             fontSize: '32px',
             fontWeight: 700,
-            color: 'white',
+            color: isLightMode ? '#000000' : 'white',
             margin: 0,
             marginBottom: '8px',
             lineHeight: '1.2',
             display: 'flex',
             alignItems: 'center',
-            gap: '8px'
+            gap: '8px',
+            justifyContent: 'space-between'
           }}>
             {lessonTitle}
-            <div style={{ position: 'relative', display: 'inline-block', flexShrink: 0, marginTop: '4px' }}>
+            <div style={{ position: 'relative', display: 'inline-block', flexShrink: 0, marginTop: '4px', marginLeft: '16px' }}>
               <img
                 src={
                   isBookmarkSelected
-                    ? (isBookmarkHovered ? '/bookmarkfilledhover.png' : '/bookmarkfilled.png')
-                    : (isBookmarkHovered ? '/bookmarkhover.png' : '/bookmark.png')
+                    ? (isBookmarkHovered 
+                        ? `/bookmarkfilledhover${isLightMode ? '(light)' : ''}.png`
+                        : `/bookmarkfilled${isLightMode ? '(light)' : ''}.png`)
+                    : (isBookmarkHovered 
+                        ? `/bookmarkhover${isLightMode ? '(light)' : ''}.png`
+                        : `/bookmark${isLightMode ? '(light)' : ''}.png`)
                 }
                 alt="Bookmark"
                 onMouseEnter={() => setIsBookmarkHovered(true)}
@@ -502,7 +573,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                 }}
               />
               <img
-                src={isSourcesHovered ? '/sourceshover.png' : '/sources.png'}
+                src={`/sources${isSourcesHovered ? 'hover' : ''}${isLightMode ? '(light)' : ''}.png`}
                 alt="Sources"
                 onMouseEnter={() => setIsSourcesHovered(true)}
                 onMouseLeave={() => setIsSourcesHovered(false)}
@@ -527,7 +598,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
               fontFamily: "'Inter Tight', sans-serif",
               fontSize: '12px',
               fontWeight: 500,
-              color: isClinicianTextHovered ? '#2563eb' : 'white',
+              color: isClinicianTextHovered ? '#2563eb' : (isLightMode ? '#000000' : 'white'),
               transition: 'color 0.2s ease',
               cursor: 'pointer',
               display: 'inline-block',
@@ -540,21 +611,23 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
             style={{
               width: 'calc(100% - 0px)',
               height: '1px',
-              backgroundColor: '#3b4652',
+              backgroundColor: isLightMode ? '#d0d1d2' : '#3b4652',
               marginTop: '16px',
               marginLeft: '0',
               marginRight: '0',
               marginBottom: '0'
             }}
           />
-          {lessonId === 1 ? (
+          <LessonContent lessonId={lessonId} sourcesSectionRef={sourcesSectionRef} isLightMode={isLightMode} />
+          {/* Old lesson content blocks removed - now using LessonContent component */}
+          {false && lessonId === 1 ? (
             <>
               {/* Section A - Always visible */}
               <div style={{ position: 'relative' }}>
                 <p style={{
                   fontFamily: "'Libre Baskerville', serif",
                   fontSize: '12pt',
-                  color: 'white',
+                  color: isLightMode ? '#000000' : 'white',
                   lineHeight: '1.6',
                   marginTop: '20px',
                   marginBottom: '0',
@@ -600,7 +673,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                 <ul style={{
                   fontFamily: "'Libre Baskerville', serif",
                   fontSize: '12pt',
-                  color: 'white',
+                  color: isLightMode ? '#000000' : 'white',
                   lineHeight: '1.6',
                   marginTop: '20px',
                   marginBottom: '0',
@@ -656,7 +729,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                 <p style={{
                   fontFamily: "'Libre Baskerville', serif",
                   fontSize: '12pt',
-                  color: 'white',
+                  color: isLightMode ? '#000000' : 'white',
                   lineHeight: '1.6',
                   marginTop: '20px',
                   marginBottom: '0',
@@ -667,7 +740,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                 <p style={{
                   fontFamily: "'Libre Baskerville', serif",
                   fontSize: '12pt',
-                  color: 'white',
+                  color: isLightMode ? '#000000' : 'white',
                   lineHeight: '1.6',
                   marginTop: '16px',
                   marginBottom: '0',
@@ -693,7 +766,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                   fontFamily: "'Inter Tight', sans-serif",
                   fontSize: '10px',
                   fontWeight: 700,
-                  color: 'white',
+                  color: isLightMode ? '#000000' : 'white',
                   marginTop: '16px',
                   marginBottom: '12px'
                 }}>
@@ -717,7 +790,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                       fontFamily: "'Inter Tight', sans-serif",
                       fontSize: '10px',
                       fontWeight: 700,
-                      color: 'white',
+                      color: isLightMode ? '#000000' : 'white',
                       marginBottom: '4px'
                     }}>
                       Learning Resources
@@ -730,7 +803,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                         fontFamily: "'Inter Tight', sans-serif",
                         fontSize: '10px',
                         fontWeight: 400,
-                        color: 'white',
+                        color: isLightMode ? '#000000' : 'white',
                         textDecoration: 'none',
                         display: 'block',
                         wordBreak: 'break-all'
@@ -759,7 +832,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                       fontFamily: "'Inter Tight', sans-serif",
                       fontSize: '10px',
                       fontWeight: 700,
-                      color: 'white',
+                      color: isLightMode ? '#000000' : 'white',
                       marginBottom: '4px'
                     }}>
                       Britannica
@@ -772,7 +845,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                         fontFamily: "'Inter Tight', sans-serif",
                         fontSize: '10px',
                         fontWeight: 400,
-                        color: 'white',
+                        color: isLightMode ? '#000000' : 'white',
                         textDecoration: 'none',
                         display: 'block',
                         wordBreak: 'break-all'
@@ -801,7 +874,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                       fontFamily: "'Inter Tight', sans-serif",
                       fontSize: '10px',
                       fontWeight: 700,
-                      color: 'white',
+                      color: isLightMode ? '#000000' : 'white',
                       marginBottom: '4px'
                     }}>
                       Medical News Today
@@ -814,7 +887,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                         fontFamily: "'Inter Tight', sans-serif",
                         fontSize: '10px',
                         fontWeight: 400,
-                        color: 'white',
+                        color: isLightMode ? '#000000' : 'white',
                         textDecoration: 'none',
                         display: 'block',
                         wordBreak: 'break-all'
@@ -830,14 +903,14 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
               </div>
               {/* Sources Section End */}
             </>
-          ) : lessonId === 2 ? (
+          ) : false && lessonId === 2 ? (
             <>
               {/* Section A - Always visible */}
               <div style={{ position: 'relative' }}>
                 <p style={{
                   fontFamily: "'Libre Baskerville', serif",
                   fontSize: '12pt',
-                  color: 'white',
+                  color: isLightMode ? '#000000' : 'white',
                   lineHeight: '1.6',
                   marginTop: '20px',
                   marginBottom: '0',
@@ -846,7 +919,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                   Cells are the tiny units of life in our bodies; they are the basic building blocks of the body. Every tissue and organ is made of many cells. Cells are so small we need a microscope to see them, but our body has trillions. Each cell has a job (e.g. muscle cells help us move, nerve cells send signals). Cells can divide to make new cells, which helps us grow and heal.
                 </p>
                 <img
-                  src="/lesson2image1.png"
+                  src="/lesson2image1.jpeg"
                   alt="Lesson 2"
                   style={{
                     width: '96%',
@@ -883,7 +956,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                 <ul style={{
                   fontFamily: "'Libre Baskerville', serif",
                   fontSize: '12pt',
-                  color: 'white',
+                  color: isLightMode ? '#000000' : 'white',
                   lineHeight: '1.6',
                   marginTop: '20px',
                   marginBottom: '0',
@@ -902,7 +975,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                   </li>
                 </ul>
                 <img
-                  src="/lesson2image2.png"
+                  src="/lesson2image2.jpg"
                   alt="Lesson 2"
                   style={{
                     width: '96%',
@@ -939,7 +1012,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                 <p style={{
                   fontFamily: "'Libre Baskerville', serif",
                   fontSize: '12pt',
-                  color: 'white',
+                  color: isLightMode ? '#000000' : 'white',
                   lineHeight: '1.6',
                   marginTop: '20px',
                   marginBottom: '0',
@@ -950,7 +1023,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                 <p style={{
                   fontFamily: "'Libre Baskerville', serif",
                   fontSize: '12pt',
-                  color: 'white',
+                  color: isLightMode ? '#000000' : 'white',
                   lineHeight: '1.6',
                   marginTop: '16px',
                   marginBottom: '0',
@@ -976,7 +1049,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                   fontFamily: "'Inter Tight', sans-serif",
                   fontSize: '10px',
                   fontWeight: 700,
-                  color: 'white',
+                  color: isLightMode ? '#000000' : 'white',
                   marginTop: '16px',
                   marginBottom: '12px'
                 }}>
@@ -1000,7 +1073,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                       fontFamily: "'Inter Tight', sans-serif",
                       fontSize: '10px',
                       fontWeight: 700,
-                      color: 'white',
+                      color: isLightMode ? '#000000' : 'white',
                       marginBottom: '4px'
                     }}>
                       CureSearch
@@ -1013,7 +1086,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                         fontFamily: "'Inter Tight', sans-serif",
                         fontSize: '10px',
                         fontWeight: 400,
-                        color: 'white',
+                        color: isLightMode ? '#000000' : 'white',
                         textDecoration: 'none',
                         display: 'block',
                         wordBreak: 'break-all'
@@ -1042,7 +1115,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                       fontFamily: "'Inter Tight', sans-serif",
                       fontSize: '10px',
                       fontWeight: 700,
-                      color: 'white',
+                      color: isLightMode ? '#000000' : 'white',
                       marginBottom: '4px'
                     }}>
                       Ambar Lab
@@ -1055,7 +1128,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                         fontFamily: "'Inter Tight', sans-serif",
                         fontSize: '10px',
                         fontWeight: 400,
-                        color: 'white',
+                        color: isLightMode ? '#000000' : 'white',
                         textDecoration: 'none',
                         display: 'block',
                         wordBreak: 'break-all'
@@ -1084,7 +1157,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                       fontFamily: "'Inter Tight', sans-serif",
                       fontSize: '10px',
                       fontWeight: 700,
-                      color: 'white',
+                      color: isLightMode ? '#000000' : 'white',
                       marginBottom: '4px'
                     }}>
                       Science Focus
@@ -1097,7 +1170,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                         fontFamily: "'Inter Tight', sans-serif",
                         fontSize: '10px',
                         fontWeight: 400,
-                        color: 'white',
+                        color: isLightMode ? '#000000' : 'white',
                         textDecoration: 'none',
                         display: 'block',
                         wordBreak: 'break-all'
@@ -1113,17 +1186,302 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
               </div>
               {/* Sources Section End */}
             </>
+          ) : false && lessonId === 3 ? (
+            <>
+              {/* Section A - Always visible */}
+              <div style={{ position: 'relative' }}>
+                <p style={{
+                  fontFamily: "'Libre Baskerville', serif",
+                  fontSize: '12pt',
+                  color: isLightMode ? '#000000' : 'white',
+                  lineHeight: '1.6',
+                  marginTop: '20px',
+                  marginBottom: '0',
+                  fontWeight: 400
+                }}>
+                  Tissues are groups of similar cells working together, and organs are made of two or more tissue types. For example, muscle tissue is made of muscle cells, and your stomach is an organ made of muscle tissue plus other tissues. Groups of cells make tissues, and groups of tissues form organs. This shows that cells build tissues, tissues make organs, and organs make systems.
+                </p>
+                <img
+                  src="/lesson3image1.jpeg"
+                  alt="Lesson 3"
+                  style={{
+                    width: '96%',
+                    height: 'auto',
+                    marginTop: '20px',
+                    display: 'block'
+                  }}
+                />
+                <div
+                  style={{
+                    width: 'calc(100% - 0px)',
+                    height: '1px',
+                    backgroundColor: '#3b4652',
+                    marginTop: '16px',
+                    marginLeft: '0',
+                    marginRight: '0',
+                    marginBottom: '0'
+                  }}
+                />
+                <p style={{
+                  fontFamily: "'Inter Tight', sans-serif",
+                  fontSize: '8pt',
+                  color: '#3b4652',
+                  marginTop: '12px',
+                  marginBottom: '0',
+                  fontWeight: 400
+                }}>
+                  Skeletal muscle tissue, showing how many similar cells are grouped together to form a tissue that contributes to larger organs.
+                </p>
+              </div>
+              
+              {/* Section B - Always visible */}
+              <div style={{ position: 'relative', marginTop: '20px' }}>
+                <ul style={{
+                  fontFamily: "'Libre Baskerville', serif",
+                  fontSize: '12pt',
+                  color: isLightMode ? '#000000' : 'white',
+                  lineHeight: '1.6',
+                  marginTop: '20px',
+                  marginBottom: '0',
+                  fontWeight: 400,
+                  paddingLeft: '20px',
+                  listStyleType: 'disc'
+                }}>
+                  <li style={{ marginBottom: '12px' }}>
+                    A tissue is a group of similar cells doing a job. For example, muscle tissue is many muscle cells working together. Skin tissue is many skin cells joined in layers.
+                  </li>
+                  <li style={{ marginBottom: '12px' }}>
+                    An organ is made of different tissues. For example, the heart is an organ with muscle tissue (to pump), nerve tissue (to regulate heartbeat), and blood vessel tissue (to carry blood). The stomach organ has muscle tissue (to churn food) and lining tissue (to protect and digest).
+                  </li>
+                  <li style={{ marginBottom: '0' }}>
+                    Think of a house: cells are like bricks, tissues are like walls, and organs are like rooms. Each level builds on the smaller ones.
+                  </li>
+                </ul>
+                <img
+                  src="/lesson3image2.jpg"
+                  alt="Lesson 3"
+                  style={{
+                    width: '96%',
+                    height: 'auto',
+                    marginTop: '20px',
+                    display: 'block'
+                  }}
+                />
+                <div
+                  style={{
+                    width: 'calc(100% - 0px)',
+                    height: '1px',
+                    backgroundColor: '#3b4652',
+                    marginTop: '16px',
+                    marginLeft: '0',
+                    marginRight: '0',
+                    marginBottom: '0'
+                  }}
+                />
+                <p style={{
+                  fontFamily: "'Inter Tight', sans-serif",
+                  fontSize: '8pt',
+                  color: '#3b4652',
+                  marginTop: '12px',
+                  marginBottom: '0',
+                  fontWeight: 400
+                }}>
+                  Figure 1.1 | A house used as an analogy: many small parts form larger structures, just as cells form tissues and tissues form organs.
+                </p>
+              </div>
+              
+              {/* Section C - Always visible */}
+              <div style={{ marginTop: '20px' }}>
+                <p style={{
+                  fontFamily: "'Libre Baskerville', serif",
+                  fontSize: '12pt',
+                  color: isLightMode ? '#000000' : 'white',
+                  lineHeight: '1.6',
+                  marginTop: '20px',
+                  marginBottom: '0',
+                  fontWeight: 400
+                }}>
+                  Examples: Skin is an organ made mostly of skin cells (epidermis tissue) and inner skin layers. The stomach is an organ made of muscle tissue (to move food), inner lining tissue (for digestive juices), and connective tissues.
+                </p>
+                <p style={{
+                  fontFamily: "'Libre Baskerville', serif",
+                  fontSize: '12pt',
+                  color: isLightMode ? '#000000' : 'white',
+                  lineHeight: '1.6',
+                  marginTop: '16px',
+                  marginBottom: '0',
+                  fontWeight: 400
+                }}>
+                  Recognizing that cells → tissue → organ helps us understand the body's structure.
+                </p>
+              </div>
+              {/* Sources Section - Always visible */}
+              <div ref={sourcesSectionRef}>
+                <div
+                  style={{
+                    width: 'calc(100% - 0px)',
+                    height: '1px',
+                    backgroundColor: '#3b4652',
+                    marginTop: '20px',
+                    marginLeft: '0',
+                    marginRight: '0',
+                    marginBottom: '0'
+                  }}
+                />
+                <div style={{
+                  fontFamily: "'Inter Tight', sans-serif",
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  color: isLightMode ? '#000000' : 'white',
+                  marginTop: '16px',
+                  marginBottom: '12px'
+                }}>
+                  Sources
+                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {/* CureSearch */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                  <img
+                    src="https://www.google.com/s2/favicons?domain=curesearch.org&sz=32"
+                    alt="CureSearch"
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      flexShrink: 0,
+                      marginTop: '2px'
+                    }}
+                  />
+                  <div style={{ flex: 1 }}>
+                    <div style={{
+                      fontFamily: "'Inter Tight', sans-serif",
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      color: isLightMode ? '#000000' : 'white',
+                      marginBottom: '4px'
+                    }}>
+                      CureSearch
+                    </div>
+                    <a
+                      href="https://curesearch.org/What-is-Cancer#:~:text=Cells%20are%20the%20basic%20building,for%20what%20role%20the%20cell"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        fontFamily: "'Inter Tight', sans-serif",
+                        fontSize: '10px',
+                        fontWeight: 400,
+                        color: isLightMode ? '#000000' : 'white',
+                        textDecoration: 'none',
+                        display: 'block',
+                        wordBreak: 'break-all'
+                      }}
+                      onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
+                      onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
+                    >
+                      https://curesearch.org/What-is-Cancer
+                    </a>
+                  </div>
+                </div>
+                {/* Wikipedia */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                  <img
+                    src="https://www.google.com/s2/favicons?domain=wikipedia.org&sz=32"
+                    alt="Wikipedia"
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      flexShrink: 0,
+                      marginTop: '2px'
+                    }}
+                  />
+                  <div style={{ flex: 1 }}>
+                    <div style={{
+                      fontFamily: "'Inter Tight', sans-serif",
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      color: isLightMode ? '#000000' : 'white',
+                      marginBottom: '4px'
+                    }}>
+                      Wikipedia
+                    </div>
+                    <a
+                      href="https://en.wikipedia.org/wiki/Striated_muscle_tissue"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        fontFamily: "'Inter Tight', sans-serif",
+                        fontSize: '10px',
+                        fontWeight: 400,
+                        color: isLightMode ? '#000000' : 'white',
+                        textDecoration: 'none',
+                        display: 'block',
+                        wordBreak: 'break-all'
+                      }}
+                      onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
+                      onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
+                    >
+                      https://en.wikipedia.org/wiki/Striated_muscle_tissue
+                    </a>
+                  </div>
+                </div>
+                {/* House Digest */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                  <img
+                    src="https://www.google.com/s2/favicons?domain=housedigest.com&sz=32"
+                    alt="House Digest"
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      flexShrink: 0,
+                      marginTop: '2px'
+                    }}
+                  />
+                  <div style={{ flex: 1 }}>
+                    <div style={{
+                      fontFamily: "'Inter Tight', sans-serif",
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      color: isLightMode ? '#000000' : 'white',
+                      marginBottom: '4px'
+                    }}>
+                      House Digest
+                    </div>
+                    <a
+                      href="https://www.housedigest.com/789739/common-house-styles-to-inspire-your-next-home/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        fontFamily: "'Inter Tight', sans-serif",
+                        fontSize: '10px',
+                        fontWeight: 400,
+                        color: isLightMode ? '#000000' : 'white',
+                        textDecoration: 'none',
+                        display: 'block',
+                        wordBreak: 'break-all'
+                      }}
+                      onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
+                      onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
+                    >
+                      https://www.housedigest.com/789739/common-house-styles-to-inspire-your-next-home/
+                    </a>
+                  </div>
+                </div>
+              </div>
+              </div>
+              {/* Sources Section End */}
+            </>
           ) : null}
           </div>
           {/* Top fade overlay */}
           <div
             style={{
               position: 'absolute',
-              top: '32px',
-              left: '32px',
-              right: '32px',
+              top: '0px',
+              left: '0px',
+              right: '0px',
               height: '60px',
-              background: 'linear-gradient(to bottom, rgba(22, 29, 37, 1) 0%, rgba(22, 29, 37, 0.8) 30%, rgba(22, 29, 37, 0) 100%)',
+              background: isLightMode 
+                ? 'linear-gradient(to bottom, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.8) 30%, rgba(255, 255, 255, 0) 100%)'
+                : 'linear-gradient(to bottom, rgba(22, 29, 37, 1) 0%, rgba(22, 29, 37, 0.8) 30%, rgba(22, 29, 37, 0) 100%)',
               pointerEvents: 'none',
               zIndex: 1000
             }}
@@ -1132,11 +1490,13 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
           <div
             style={{
               position: 'absolute',
-              bottom: '32px',
-              left: '32px',
-              right: '32px',
+              bottom: '0px',
+              left: '0px',
+              right: '0px',
               height: '60px',
-              background: 'linear-gradient(to top, rgba(22, 29, 37, 1) 0%, rgba(22, 29, 37, 0.8) 30%, rgba(22, 29, 37, 0) 100%)',
+              background: isLightMode
+                ? 'linear-gradient(to top, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.8) 30%, rgba(255, 255, 255, 0) 100%)'
+                : 'linear-gradient(to top, rgba(22, 29, 37, 1) 0%, rgba(22, 29, 37, 0.8) 30%, rgba(22, 29, 37, 0) 100%)',
               pointerEvents: 'none',
               zIndex: 1000
             }}
@@ -1152,7 +1512,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
             top: '50%',
             left: '50%',
             transform: 'translate(-50%, -50%)',
-            backgroundColor: '#161d25',
+            backgroundColor: isLightMode ? '#ffffff' : '#161d25',
             borderRadius: '12px',
             padding: '32px',
             zIndex: 1000002,
@@ -1162,7 +1522,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-            <h3 style={{ color: 'white', fontSize: '20px', fontWeight: 600, fontFamily: "'Unbounded', sans-serif" }}>
+            <h3 style={{ color: isLightMode ? '#000000' : 'white', fontSize: '20px', fontWeight: 600, fontFamily: "'Unbounded', sans-serif" }}>
               Report Content
             </h3>
             <button
@@ -1170,7 +1530,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
               style={{
                 background: 'transparent',
                 border: 'none',
-                color: 'white',
+                color: isLightMode ? '#000000' : 'white',
                 fontSize: '24px',
                 cursor: 'pointer',
                 padding: '0',
@@ -1196,7 +1556,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                 onChange={() => handleFlagReasonChange('inaccurate')}
                 style={{ width: '18px', height: '18px', cursor: 'pointer' }}
               />
-              <span style={{ color: 'white', fontSize: '16px', fontFamily: "'Inter Tight', sans-serif" }}>
+              <span style={{ color: isLightMode ? '#000000' : 'white', fontSize: '16px', fontFamily: "'Inter Tight', sans-serif" }}>
                 This content is inaccurate/misleading
               </span>
             </label>
@@ -1208,7 +1568,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                 onChange={() => handleFlagReasonChange('harmful')}
                 style={{ width: '18px', height: '18px', cursor: 'pointer' }}
               />
-              <span style={{ color: 'white', fontSize: '16px', fontFamily: "'Inter Tight', sans-serif" }}>
+              <span style={{ color: isLightMode ? '#000000' : 'white', fontSize: '16px', fontFamily: "'Inter Tight', sans-serif" }}>
                 This content promotes harm or is inappropriate
               </span>
             </label>
@@ -1220,7 +1580,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                 onChange={() => handleFlagReasonChange('technical')}
                 style={{ width: '18px', height: '18px', cursor: 'pointer' }}
               />
-              <span style={{ color: 'white', fontSize: '16px', fontFamily: "'Inter Tight', sans-serif" }}>
+              <span style={{ color: isLightMode ? '#000000' : 'white', fontSize: '16px', fontFamily: "'Inter Tight', sans-serif" }}>
                 Technical errors (e.g., parts of the question not loading)
               </span>
             </label>
@@ -1232,7 +1592,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                 onChange={() => handleFlagReasonChange('somethingElse')}
                 style={{ width: '18px', height: '18px', cursor: 'pointer' }}
               />
-              <span style={{ color: 'white', fontSize: '16px', fontFamily: "'Inter Tight', sans-serif" }}>
+              <span style={{ color: isLightMode ? '#000000' : 'white', fontSize: '16px', fontFamily: "'Inter Tight', sans-serif" }}>
                 Something else
               </span>
             </label>
@@ -1247,7 +1607,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
                 width: '100%',
                 minHeight: '100px',
                 backgroundColor: '#29323c',
-                color: 'white',
+                color: isLightMode ? '#000000' : 'white',
                 border: 'none',
                 borderRadius: '8px',
                 padding: '12px',
@@ -1266,7 +1626,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
               style={{
                 padding: '10px 20px',
                 backgroundColor: '#2563eb',
-                color: 'white',
+                color: isLightMode ? '#000000' : 'white',
                 border: 'none',
                 borderRadius: '8px',
                 cursor: 'pointer',
@@ -1287,8 +1647,18 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
       {/* Back Button */}
       <button
         onClick={onQuit}
-        className="absolute top-0 left-0 p-2 text-white hover:text-gray-300"
-        style={{ fontSize: '24px', zIndex: 10000, position: 'fixed' }}
+        className="absolute p-2"
+        style={{ 
+          fontSize: '24px', 
+          zIndex: 10000, 
+          position: 'fixed', 
+          top: '20px', 
+          left: '60px',
+          color: isLightMode ? '#000000' : 'white',
+          transition: 'color 0.2s ease'
+        }}
+        onMouseEnter={(e) => e.target.style.color = isLightMode ? '#333333' : '#d1d5db'}
+        onMouseLeave={(e) => e.target.style.color = isLightMode ? '#000000' : 'white'}
       >
         ←
       </button>
@@ -1300,7 +1670,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
         left: 0,
         right: 0,
         height: '80px',
-        backgroundColor: '#161d25',
+        backgroundColor: isLightMode ? '#ffffff' : '#161d25',
         zIndex: 1000
       }} />
 
@@ -1314,14 +1684,17 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
         display: 'flex',
         alignItems: 'center',
         gap: '12px',
-        width: 'calc(100% - 64px)',
-        maxWidth: '800px'
+        width: (isPracticeMode || isReviewOrSkipQuiz) ? 'auto' : 'calc(100% - 64px)',
+        maxWidth: (isPracticeMode || isReviewOrSkipQuiz) ? '800px' : '800px',
+        justifyContent: (isPracticeMode || isReviewOrSkipQuiz) ? 'center' : 'flex-start'
       }}>
         {/* Main progress bar */}
         <div style={{
-          flex: 1,
+          flex: (isPracticeMode || isReviewOrSkipQuiz) ? '0 0 auto' : 1,
+          width: (isPracticeMode || isReviewOrSkipQuiz) ? '800px' : 'auto',
+          maxWidth: '800px',
           height: '8px',
-          backgroundColor: '#3b4652',
+          backgroundColor: isLightMode ? '#d0d1d2' : '#3b4652',
           borderRadius: '2px',
           overflow: 'hidden',
           position: 'relative'
@@ -1334,25 +1707,27 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
             transition: 'width 0.3s ease'
           }} />
         </div>
-        {/* Last 3 questions indicators */}
-        <div style={{
-          display: 'flex',
-          gap: '8px',
-          alignItems: 'center'
-        }}>
-          {lastThreeQuestions.map((status, index) => (
-            <div
-              key={index}
-              style={{
-                width: '8px',
-                height: '8px',
-                borderRadius: '2px',
-                backgroundColor: status === 'correct' ? '#2563eb' : status === 'wrong' ? '#f73d35' : '#3b4652',
-                transition: 'background-color 0.3s ease'
-              }}
-            />
-          ))}
-        </div>
+        {/* Last 3 questions indicators - only show for regular lessons (not practice, review, or skip quiz) */}
+        {!isPracticeMode && !isReviewOrSkipQuiz && (
+          <div style={{
+            display: 'flex',
+            gap: '8px',
+            alignItems: 'center'
+          }}>
+            {lastThreeQuestions.map((status, index) => (
+              <div
+                key={index}
+                style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '2px',
+                  backgroundColor: status === 'correct' ? '#2563eb' : status === 'wrong' ? '#f73d35' : (isLightMode ? '#d0d1d2' : '#3b4652'),
+                  transition: 'background-color 0.3s ease'
+                }}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Shadow at top */}
@@ -1384,29 +1759,45 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
         <div className="flex justify-center px-8">
           <div className="flex items-center" style={{ width: '100%', maxWidth: 'calc(200px * 3 + 2rem * 2)', position: 'relative' }}>
             <h2
-              className="text-base md:text-lg text-white text-left"
-              style={{ fontFamily: "'Unbounded', sans-serif", fontWeight: 500, lineHeight: '1.5' }}
+              className="text-base md:text-lg text-left"
+              style={{ fontFamily: "'Unbounded', sans-serif", fontWeight: 500, lineHeight: '1.5', paddingRight: '100px', color: isLightMode ? '#000000' : 'white' }}
             >
                 {questionData?.question || 'Select the correct answer'}
             </h2>
             {/* Icons container - aligned with right edge of third card */}
             <div className="flex items-center gap-4" style={{ position: 'absolute', right: '0px' }}>
-              <div style={{ position: 'relative' }}>
-                <img 
-                  src={hoveredIcon === 'book' ? "/book-alt (1)(hover).png" : "/book-alt (1).png"} 
-                  alt="Book" 
-                  className="h-6 w-6"
-                    style={{ cursor: 'pointer', position: 'relative', zIndex: 1 }}
-                  onMouseEnter={() => setHoveredIcon('book')}
-                  onMouseLeave={() => setHoveredIcon(null)}
-                  onClick={handleBookClick}
-                />
-              </div>
+              {showContentButton && (
+                <div style={{ position: 'relative' }}>
+                  <img 
+                    src={hoveredIcon === 'book' 
+                      ? (isLightMode ? '/lighthover1.png' : '/book-alt (1) (hover).png')
+                      : (isLightMode ? '/book-alt (1)(light).png' : '/book-alt (1).png')} 
+                    alt="Book" 
+                      style={{ 
+                        cursor: 'pointer', 
+                        position: 'relative', 
+                        zIndex: 1, 
+                        width: '24px', 
+                        height: '24px',
+                        opacity: hoveredIcon === 'book' ? 0.7 : 1,
+                        transition: 'opacity 0.2s ease'
+                      }}
+                    onMouseEnter={() => setHoveredIcon('book')}
+                    onMouseLeave={() => setHoveredIcon(null)}
+                    onClick={handleBookClick}
+                    onError={(e) => {
+                      // Fallback to normal image if hover image doesn't exist
+                      e.target.src = isLightMode ? '/book-alt (1)(light).png' : '/book-alt (1).png'
+                    }}
+                  />
+                </div>
+              )}
               <img 
-                src={hoveredIcon === 'flag' ? "/finish-flag(hover).png" : "/finish-flag.png"} 
+                src={hoveredIcon === 'flag' 
+                  ? (isLightMode ? '/lighthover2.png' : '/finish-flag(hover).png')
+                  : (isLightMode ? '/finish-flag(light).png' : '/finish-flag.png')} 
                 alt="Flag" 
-                className="h-6 w-6"
-                style={{ cursor: 'pointer' }}
+                style={{ cursor: 'pointer', width: '24px', height: '24px' }}
                 onMouseEnter={() => setHoveredIcon('flag')}
                 onMouseLeave={() => setHoveredIcon(null)}
                 onClick={handleFlagClick}
@@ -1434,6 +1825,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
         <img
                     src={getCardImage(cardId, currentState)}
                     alt={option.label}
+                    draggable="false"
                     onMouseDown={() => {
                       // Don't allow pressing if card is already selected
                       if (selectedCard === cardId || currentState === 'selected') return
@@ -1462,7 +1854,10 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
             display: 'block',
                       cursor: (isCardInteractable && selectedCard !== cardId && currentState !== 'selected') ? 'pointer' : 'default',
                       position: 'relative',
-                      zIndex: 0
+                      zIndex: 0,
+                      userSelect: 'none',
+                      WebkitUserSelect: 'none',
+                      MozUserSelect: 'none'
           }}
                     onClick={(e) => {
                       // Prevent clicking if card is already selected
@@ -1509,7 +1904,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
         left: 0,
         right: 0,
         height: '120px',
-        backgroundColor: '#161d25',
+        backgroundColor: isLightMode ? '#ffffff' : '#161d25',
         zIndex: 50
       }} />
 
@@ -1517,7 +1912,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
       <div style={{
         width: '100%',
         height: questionState === 'correct' ? (isTransitioning ? '0px' : '120px') : '0px',
-        backgroundColor: '#1f5d07',
+        backgroundColor: isLightMode ? '#caffb5ff' : '#1f5d07',
         position: 'fixed',
         bottom: 0,
         left: 0,
@@ -1530,7 +1925,7 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
       <div style={{
         width: '100%',
         height: '4px',
-        backgroundColor: questionState === 'correct' && !isTransitioning ? '#51de18' : '#3b4652',
+        backgroundColor: questionState === 'correct' && !isTransitioning ? '#51de18' : (isLightMode ? '#d0d1d2' : '#3b4652'),
         position: 'fixed',
         bottom: '120px',
         left: 0,
@@ -1569,12 +1964,16 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
             <img
               src={getSubmitButtonImage()}
               alt="Submit"
+              draggable="false"
               style={{ 
                 display: 'block',
                 width: '133px',
                 height: '67px',
                 objectFit: 'contain',
-                pointerEvents: 'none'
+                pointerEvents: 'none',
+                userSelect: 'none',
+                WebkitUserSelect: 'none',
+                MozUserSelect: 'none'
               }}
             />
           </button>
@@ -1600,12 +1999,16 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
               <img
                 src={getSubmitButtonImage()}
                 alt="Understood"
+                draggable="false"
                 style={{ 
                   display: 'block',
                   width: '133px',
                   height: '67px',
                   objectFit: 'contain',
-                  pointerEvents: 'none'
+                  pointerEvents: 'none',
+                  userSelect: 'none',
+                  WebkitUserSelect: 'none',
+                  MozUserSelect: 'none'
                 }}
               />
           </button>
@@ -1614,90 +2017,29 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
               alt="Hint"
               onMouseEnter={() => setIsLightbulbHovered(true)}
               onMouseLeave={() => setIsLightbulbHovered(false)}
-              className="h-6 w-6"
               style={{
                 cursor: 'pointer',
-                display: 'block'
+                display: 'block',
+                width: '24px',
+                height: '24px'
               }}
             />
           </div>
         )}
 
-        {(questionState === 'wrong' || questionState === 'correct') && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <button
-            onClick={handleContinue}
-              onMouseDown={() => setIsButtonPressed(true)}
-              onMouseUp={() => setIsButtonPressed(false)}
-              onMouseLeave={() => setIsButtonPressed(false)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                padding: 0,
-                margin: 0,
-                cursor: 'pointer',
-                width: '133px',
-                height: '67px'
-              }}
-            >
-              <img
-                src={getSubmitButtonImage()}
-                alt="Continue"
-                style={{ 
-                  display: 'block',
-                  width: '133px',
-                  height: '67px',
-                  objectFit: 'contain',
-                  pointerEvents: 'none'
-                }}
-              />
-          </button>
-            {questionState === 'wrong' && (
-              <img
-                src={isLightbulbHovered ? "/lightbulb-question-hover.png" : "/lightbulb-question.png"}
-                alt="Hint"
-                onMouseEnter={() => setIsLightbulbHovered(true)}
-                onMouseLeave={() => setIsLightbulbHovered(false)}
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  cursor: 'pointer',
-                  display: 'block'
-                }}
-              />
-        )}
-      </div>
-        )}
       </div>
 
-      {/* Correct Text - Follows Green Box, Centered with Submit Button */}
-      {questionState === 'correct' && !isTransitioning && (
+      {/* Continue Button - Inside green box when correct, far right */}
+      {(questionState === 'wrong' || questionState === 'correct') && (
         <div style={{ 
-          position: 'fixed', 
-          bottom: '60.5px',
-          left: 'calc(50% + 5px)',
-          transform: 'translateX(-50%) translateY(50%)',
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '12px',
+          position: 'fixed',
+          bottom: questionState === 'correct' ? '32px' : '32px', // Inside green box (at bottom of box)
+          right: questionState === 'correct' ? '32px' : '32px', // Far right inside green box
           zIndex: 70,
-          animation: 'slideUpWithBoxCenteredText 0.167s ease-out forwards',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '4px',
-          fontFamily: "'Unbounded', sans-serif"
-        }}>
-          <span style={{ color: 'white', fontSize: '24px', fontWeight: 600 }}>Correct!</span>
-          <span style={{ color: '#51de18', fontSize: '22px', fontWeight: 600, fontFamily: "'Inter Tight', sans-serif" }}>+5xp</span>
-        </div>
-      )}
-
-      {/* Duplicate Button - Follows Green Box, Centered in Box */}
-      {questionState === 'correct' && !isTransitioning && (
-        <div className="flex justify-end items-center" style={{ 
-          position: 'fixed', 
-          bottom: '27px',
-          right: '32px',
-          zIndex: 70,
-          animation: 'slideUpWithBoxCentered 0.167s ease-out forwards',
-          height: '67px'
+          transition: questionState === 'correct' ? 'bottom 0.2s ease-out, right 0.2s ease-out' : 'none'
         }}>
           <button
             onClick={handleContinue}
@@ -1715,19 +2057,59 @@ const IllustratedMCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition
             }}
           >
             <img
-              src={getDuplicateButtonImage()}
+              src={getContinueButtonImage()}
               alt="Continue"
+              draggable="false"
               style={{ 
                 display: 'block',
                 width: '133px',
                 height: '67px',
                 objectFit: 'contain',
-                pointerEvents: 'none'
+                pointerEvents: 'none',
+                userSelect: 'none',
+                WebkitUserSelect: 'none',
+                MozUserSelect: 'none'
               }}
             />
           </button>
+          {questionState === 'wrong' && (
+            <img
+              src={isLightbulbHovered ? "/lightbulb-question-hover.png" : "/lightbulb-question.png"}
+              alt="Hint"
+              onMouseEnter={() => setIsLightbulbHovered(true)}
+              onMouseLeave={() => setIsLightbulbHovered(false)}
+              style={{
+                width: '32px',
+                height: '32px',
+                cursor: 'pointer',
+                display: 'block'
+              }}
+            />
+          )}
         </div>
       )}
+
+      {/* Correct Text - Centered inside green box */}
+      {questionState === 'correct' && !isTransitioning && (
+        <div style={{ 
+          position: 'fixed', 
+          bottom: '50px', // Slightly lower for better visual centering
+          left: '50%',
+          transform: 'translateX(-50%)', // Horizontally centered
+          zIndex: 70,
+          animation: 'slideUpWithBoxCenteredText 0.167s ease-out forwards',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          fontFamily: "'Unbounded', sans-serif"
+        }}>
+          <span style={{ color: isLightMode ? '#000000' : '#ffffff', fontSize: '24px', fontWeight: 600 }}>Correct!</span>
+          <span style={{ color: '#51de18', fontSize: '22px', fontWeight: 600, fontFamily: "'Inter Tight', sans-serif" }}>
+            +{isPracticeMode && !isPersonalizedPractice ? '2' : '5'}xp
+          </span>
+        </div>
+      )}
+
     </div>
   )
 })

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
+import { supabase } from '../services/authService'
 import SplitText from '../components/reactbits/SplitText'
 import Navigation from '../components/Navigation'
 

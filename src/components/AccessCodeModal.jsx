@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ButtonTemplate from './ButtonTemplate'
+import { verifyAdminCode, setAdminAuthenticated } from '../utils/adminAuth'
 
 const AccessCodeModal = ({ isOpen, onClose }) => {
   const navigate = useNavigate()
@@ -78,6 +79,13 @@ const AccessCodeModal = ({ isOpen, onClose }) => {
     setAccessCode(value)
     setError('')
     
+    // Check for secret admin code
+    const isAdminCode = verifyAdminCode(value)
+    if (isAdminCode) {
+      setShowUliInput(false)
+      return
+    }
+    
     // Special admin access code
     if (value === 'devsecure') {
       setShowUliInput(false)
@@ -95,6 +103,20 @@ const AccessCodeModal = ({ isOpen, onClose }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    
+    // Check for secret admin code
+    const isAdminCode = verifyAdminCode(accessCode)
+    if (isAdminCode) {
+      console.log('[AccessCodeModal] Admin code verified, redirecting to /admin')
+      setAdminAuthenticated()
+      onClose()
+      navigate('/admin', { replace: true })
+      setAccessCode('')
+      setUli('')
+      setShowUliInput(false)
+      setError('')
+      return
+    }
     
     // Special admin access code
     if (accessCode === 'devsecure') {
@@ -154,7 +176,7 @@ const AccessCodeModal = ({ isOpen, onClose }) => {
     // Special testsecurev2 access code
     if (accessCode === 'testsecurev2') {
       onClose()
-      navigate('/testsecurev2')
+      navigate('/')
       
       // Reset form
       setAccessCode('')
@@ -268,6 +290,13 @@ const AccessCodeModal = ({ isOpen, onClose }) => {
             <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
               <p className="text-sm text-green-800">
                 <strong>Test Secure V2:</strong> Access the new question type testing interface.
+              </p>
+            </div>
+          )}
+          {verifyAdminCode(accessCode) && (
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 mb-4">
+              <p className="text-sm text-purple-800">
+                <strong>Admin Access:</strong> You will be redirected to the admin analytics dashboard.
               </p>
             </div>
           )}

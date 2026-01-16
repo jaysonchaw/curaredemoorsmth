@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
+import { supabase } from '../services/authService'
 import SplitText from '../components/reactbits/SplitText'
 import Counter from '../components/Counter'
 import GlareHover from '../components/reactbits/GlareHover'

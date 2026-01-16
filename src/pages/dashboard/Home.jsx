@@ -1,6 +1,6 @@
 import { useOutletContext, useNavigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { supabase } from '../../lib/supabase'
+import { supabase } from '../../services/authService'
 
 // Helper function to calculate streak days with timezone awareness
 const calculateStreakDays = (completedLessons, timezone) => {
@@ -128,7 +128,7 @@ const Home = () => {
         } else {
           // Fetch completed lessons with time spent
           const { data: completedLessons } = await supabase
-            .from('user_lesson_progress')
+            .from('user_progress')
             .select('time_spent_minutes, completed_at')
             .eq('user_id', userData.id)
             .eq('status', 'completed')
@@ -212,7 +212,7 @@ const Home = () => {
                 }
               } else {
                 const { data: currentProgress } = await supabase
-                  .from('user_lesson_progress')
+                  .from('user_progress')
                   .select(`
                     lesson_id,
                     status,

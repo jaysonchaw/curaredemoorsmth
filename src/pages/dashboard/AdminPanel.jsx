@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
-import { supabase } from '../../lib/supabase'
+import { supabase } from '../../services/authService'
 
 const AdminPanel = () => {
   const navigate = useNavigate()

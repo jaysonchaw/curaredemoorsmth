@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useOutletContext, useNavigate } from 'react-router-dom'
-import { supabase } from '../../lib/supabase'
+import { supabase } from '../../services/authService'
 
 const PostTest = () => {
   const { userData } = useOutletContext()

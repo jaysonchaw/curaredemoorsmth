@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useLayoutEffect, useImperativeHandle, forwardRef } from 'react'
 import { getLessonMetadata } from '../data/lessons/lessonLoader'
+import LessonContent from '../components/LessonContent'
 
 // Function to calculate time since last update
 const getLastUpdatedText = (lastUpdatedTimestamp) => {
@@ -24,8 +25,11 @@ const getLastUpdatedText = (lastUpdatedTimestamp) => {
   }
 }
 
-const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransitioning, shouldShowNext, questionData, questionIndex, correctAnswersCount = 0, lastThreeQuestions = ['pending', 'pending', 'pending'], onQuit, lessonId = 1 }, ref) => {
+const MCQ = forwardRef(({ onContinue, onCorrectAnswer, onAnswerResult, isInTransition, isTransitioning, shouldShowNext, questionData, questionIndex, correctAnswersCount = 0, answeredCount = 0, lastThreeQuestions = ['pending', 'pending', 'pending'], onQuit, lessonId = 1, totalQuestions = 9, isPracticeMode = false, practiceProgress = 0, showContentButton = true, isReviewOrSkipQuiz = false, isLightMode = false, isPersonalizedPractice = false }, ref) => {
   const contentRef = useRef(null)
+  // Get lesson title from metadata
+  const lessonMetadata = getLessonMetadata(lessonId)
+  const lessonTitle = lessonMetadata?.title || `Lesson ${lessonId}`
   // Initialize option states from questionData
   const getInitialOptionStates = () => {
     if (questionData?.options) {
@@ -39,8 +43,8 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
   
   const [selectedOption, setSelectedOption] = useState(null)
   const [questionState, setQuestionState] = useState('active') // 'active', 'warned', 'wrong', 'correct'
-  // First 6 questions get 2 attempts (lives = 2), rest get 1 attempt (lives = 1)
-  const [lives, setLives] = useState(questionIndex < 6 ? 2 : 1)
+  // Reviews and skip quizzes: always 1 attempt. Regular lessons: First 6 questions get 2 attempts (lives = 2), rest get 1 attempt (lives = 1)
+  const [lives, setLives] = useState(isReviewOrSkipQuiz ? 1 : (questionIndex < 6 ? 2 : 1))
   const [optionStates, setOptionStates] = useState(() => getInitialOptionStates())
   const [hoveredOption, setHoveredOption] = useState(null)
   const [hoveredIcon, setHoveredIcon] = useState(null) // 'book' or 'flag'
@@ -72,6 +76,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
   }
   const [showGleamOverlay, setShowGleamOverlay] = useState(false)
   const [isButtonPressed, setIsButtonPressed] = useState(false)
+  const [hasReportedAnswer, setHasReportedAnswer] = useState(false)
   const [pressedOption, setPressedOption] = useState(null)
   const [isLightbulbHovered, setIsLightbulbHovered] = useState(false)
   const [flagReasons, setFlagReasons] = useState({
@@ -124,6 +129,9 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
         if (onCorrectAnswer) {
           onCorrectAnswer()
         }
+        // Dispatch XP event: 2 XP for practice mode, 5 XP for personalized practice or regular lessons
+        const xpAmount = (isPracticeMode && !isPersonalizedPractice) ? 2 : 5
+        window.dispatchEvent(new CustomEvent('tsv2XPGained', { detail: { xp: xpAmount } }))
         setShowGleamOverlay(true)
         setTimeout(() => {
           setShowGleamOverlay(false)
@@ -142,22 +150,23 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
   }))
 
   const getMCQBoxImage = (state, isPressed, isHovered) => {
+    const lightSuffix = isLightMode ? '(light)' : ''
     // If mouse is held down, show pressed state
     if (isPressed && questionState === 'active' && state === 'default') {
-      return '/MCQboxpressed.svg'
+      return `/MCQboxpressed${lightSuffix}.svg`
     }
     // If hovering and in default state, show hover
     if (isHovered && state === 'default' && questionState === 'active') {
-      return '/MCQboxhover.svg'
+      return `/MCQboxhover${lightSuffix}.svg`
     }
     const stateMap = {
-      'default': 'MCQboxdefault.svg',
-      'selected': 'MCQboxselected.svg',
-      'correct': 'MCQboxcorrect.svg',
-      'warned': 'MCQboxwarned.svg',
-      'wrong': 'MCQboxwrong.svg'
+      'default': `MCQboxdefault${lightSuffix}.svg`,
+      'selected': `MCQboxselected${lightSuffix}.svg`,
+      'correct': `MCQboxcorrect${lightSuffix}.svg`,
+      'warned': `MCQboxwarned${lightSuffix}.svg`,
+      'wrong': `MCQboxwrong${lightSuffix}.svg`
     }
-    return `/${stateMap[state] || 'MCQboxdefault.svg'}`
+    return `/${stateMap[state] || `MCQboxdefault${lightSuffix}.svg`}`
   }
 
   const handleOptionClick = (optionId) => {
@@ -197,31 +206,35 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
 
     const correctAnswer = questionData?.correctAnswer
     if (selectedOption === correctAnswer) {
-        // Correct answer
-        setOptionStates(prev => ({ ...prev, [selectedOption]: 'correct' }))
-        setQuestionState('correct')
-        // Notify parent to update progress bar immediately
-        if (onCorrectAnswer) {
-          onCorrectAnswer()
-        }
-        // Show gleam overlay animation
-        setShowGleamOverlay(true)
-        // Remove after 480ms (0.48 seconds - one loop)
-        setTimeout(() => {
-          setShowGleamOverlay(false)
-        }, 480)
+      setOptionStates(prev => ({ ...prev, [selectedOption]: 'correct' }))
+      setQuestionState('correct')
+      if (!hasReportedAnswer) {
+        if (onAnswerResult) onAnswerResult('correct')
+        if (onCorrectAnswer) onCorrectAnswer()
+        // Dispatch XP event: 2 XP for practice mode, 5 XP for personalized practice or regular lessons
+        const xpAmount = (isPracticeMode && !isPersonalizedPractice) ? 2 : 5
+        window.dispatchEvent(new CustomEvent('tsv2XPGained', { detail: { xp: xpAmount } }))
+        setHasReportedAnswer(true)
+      }
+      setShowGleamOverlay(true)
+      setTimeout(() => {
+        setShowGleamOverlay(false)
+      }, 480)
     } else {
-      // Wrong answer
-      if (lives === 2) {
-        // First wrong attempt (only for first 6 questions)
-        setOptionStates(prev => ({ ...prev, [selectedOption]: 'warned' }))
-        setQuestionState('warned')
-        setLives(1)
-      } else {
-        // Second wrong attempt (or first attempt for questions after 6)
+      // Reviews and skip quizzes: no warned state, go straight to wrong
+      if (isReviewOrSkipQuiz || lives === 1) {
         setOptionStates(prev => ({ ...prev, [selectedOption]: 'wrong' }))
         setQuestionState('wrong')
         setLives(0)
+        if (!hasReportedAnswer) {
+          if (onAnswerResult) onAnswerResult('wrong')
+          setHasReportedAnswer(true)
+        }
+      } else {
+        // Regular lessons: first wrong answer shows warned state
+        setOptionStates(prev => ({ ...prev, [selectedOption]: 'warned' }))
+        setQuestionState('warned')
+        setLives(1)
       }
     }
   }
@@ -246,8 +259,9 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
     setOptionStates(getInitialOptionStates())
     setQuestionState('active')
     setSelectedOption(null)
-    // First 6 questions get 2 attempts, rest get 1 attempt
-    setLives(questionIndex < 6 ? 2 : 1)
+    setHasReportedAnswer(false)
+    // Reviews and skip quizzes: always 1 attempt. Regular lessons: First 6 questions get 2 attempts, rest get 1 attempt
+    setLives(isReviewOrSkipQuiz ? 1 : (questionIndex < 6 ? 2 : 1))
   }
 
   const handleFlagClick = () => {
@@ -273,15 +287,47 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
   }
 
   const handleFlagSubmit = () => {
-    // Handle flag submission here
-    console.log('Flag reasons:', flagReasons)
-    console.log('Other text:', flagOtherText)
+    // Track flagged question if analytics enabled
+    if (flagReasons.inaccurate || flagReasons.harmful || flagReasons.technical || flagReasons.somethingElse) {
+      const reasons = []
+      if (flagReasons.inaccurate) reasons.push('inaccurate')
+      if (flagReasons.harmful) reasons.push('harmful')
+      if (flagReasons.technical) reasons.push('technical')
+      if (flagReasons.somethingElse) reasons.push('somethingElse')
+      
+      // Import and track
+      import('../utils/analyticsTracker').then(({ trackFlaggedQuestion }) => {
+        trackFlaggedQuestion(lessonId, questionIndex, reasons.join(', '))
+      }).catch(() => {
+        // Silently fail if analytics not available
+      })
+    }
+    
     handleFlagClose()
   }
 
   const handleBookClick = () => {
     setIsBookContentOpen(!isBookContentOpen)
   }
+
+  // Load bookmark state from localStorage on mount and when lessonId changes
+  useEffect(() => {
+    const bookmarkKey = `bookmark_lesson_${lessonId}`
+    const savedBookmark = localStorage.getItem(bookmarkKey)
+    if (savedBookmark === 'true') {
+      setIsBookmarkSelected(true)
+    }
+  }, [lessonId])
+
+  // Save bookmark state to localStorage when it changes
+  useEffect(() => {
+    const bookmarkKey = `bookmark_lesson_${lessonId}`
+    if (isBookmarkSelected) {
+      localStorage.setItem(bookmarkKey, 'true')
+    } else {
+      localStorage.removeItem(bookmarkKey)
+    }
+  }, [isBookmarkSelected, lessonId])
 
   // Reset state when questionData changes
   useEffect(() => {
@@ -293,11 +339,12 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
       setOptionStates(newOptionStates)
       setSelectedOption(null)
       setQuestionState('active')
-      // First 6 questions get 2 attempts, rest get 1 attempt
-      setLives(questionIndex < 6 ? 2 : 1)
+      // Reviews and skip quizzes: always 1 attempt. Regular lessons: First 6 questions get 2 attempts, rest get 1 attempt
+      setLives(isReviewOrSkipQuiz ? 1 : (questionIndex < 6 ? 2 : 1))
       setShowGleamOverlay(false)
       setPressedOption(null)
       setHoveredOption(null)
+      setHasReportedAnswer(false)
     }
   }, [questionData?.id, questionData?.options, questionIndex])
 
@@ -310,35 +357,55 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
 
   const getSubmitButtonImage = () => {
     const pressed = isButtonPressed ? 'pressed' : ''
+    const lightSuffix = isLightMode ? '(light)' : ''
     let path = ''
     if (questionState === 'active') {
       if (!canSubmit) {
-        path = `/submitunselected${pressed}.svg`
+        path = `/submitunselected${pressed}${lightSuffix}.svg`
       } else {
-        path = `/submitselected${pressed}.svg`
+        path = `/submitselected${pressed}${lightSuffix}.svg`
       }
     } else if (questionState === 'warned') {
-      path = `/submitwarned${pressed}.svg`
+      path = `/submitwarned${pressed}${lightSuffix}.svg`
     } else if (questionState === 'wrong') {
-      path = `/submitwrong${pressed}.svg`
+      path = `/submitwrong${pressed}${lightSuffix}.svg`
     } else if (questionState === 'correct') {
-      path = `/submitselected${pressed}.svg`
+      path = `/submitselected${pressed}${lightSuffix}.svg`
     } else {
-      path = `/submitunselected${pressed}.svg`
+      path = `/submitunselected${pressed}${lightSuffix}.svg`
     }
     return path
   }
 
-  const getDuplicateButtonImage = () => {
+  const getContinueButtonImage = () => {
     const pressed = isButtonPressed ? 'pressed' : ''
-    return `/submitcorrect${pressed}(new).svg`
+    const lightSuffix = isLightMode ? '(light)' : ''
+    return `/submitcorrect${pressed}${lightSuffix}.svg`
   }
 
-  // Calculate progress bar width (1/6 for first 6 questions)
-  const progressWidth = Math.min(correctAnswersCount, 6) / 6 * 100
+  const getDuplicateButtonImage = () => {
+    const pressed = isButtonPressed ? 'pressed' : ''
+    const lightSuffix = isLightMode ? '(light)' : ''
+    return `/submitcorrect${pressed}(new)${lightSuffix}.svg`
+  }
+
+  // Calculate progress bar width
+  let progressWidth
+  if (isPracticeMode) {
+    // Practice mode: use practiceProgress (0-1) converted to percentage
+    progressWidth = Math.min(practiceProgress * 100, 100)
+  } else if (isReviewOrSkipQuiz) {
+    // Review/Skip quiz mode: based on answered count / total questions (updates smoothly as questions are answered)
+    progressWidth = (answeredCount / totalQuestions) * 100
+  } else {
+    // Regular lesson mode: based on question index (progresses regardless of correctness)
+    const primaryTotal = 6
+    const answeredPrimary = Math.min(answeredCount, primaryTotal)
+    progressWidth = (answeredPrimary / primaryTotal) * 100
+  }
 
   return (
-    <div style={{ backgroundColor: '#161d25', minHeight: '100vh', position: 'relative', overflow: 'hidden' }}>
+    <div style={{ backgroundColor: isLightMode ? '#ffffff' : '#161d25', minHeight: '100vh', position: 'relative', overflow: 'hidden' }}>
       {/* Darkening Overlay - Flag Modal */}
       <div
         onClick={handleFlagClose}
@@ -383,7 +450,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
             width: '45vw',
             maxWidth: '500px',
             aspectRatio: '3 / 4',
-            backgroundColor: '#161d25',
+            backgroundColor: isLightMode ? '#ffffff' : '#161d25',
             borderRadius: '12px',
             zIndex: 1000003,
             boxShadow: '0 10px 40px rgba(0, 0, 0, 0.5)',
@@ -414,7 +481,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
               right: '16px',
               background: 'transparent',
               border: 'none',
-              color: 'white',
+              color: isLightMode ? '#000000' : 'white',
               fontSize: '24px',
               cursor: 'pointer',
               padding: 0,
@@ -428,7 +495,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
             fontFamily: "'Inter Tight', sans-serif",
             fontSize: '12px',
             fontWeight: 700,
-            color: 'white',
+            color: isLightMode ? '#000000' : 'white',
             textTransform: 'uppercase',
             marginBottom: '16px',
             letterSpacing: '0.5px'
@@ -439,21 +506,26 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
             fontFamily: 'Helvetica, Arial, sans-serif',
             fontSize: '32px',
             fontWeight: 700,
-            color: 'white',
+            color: isLightMode ? '#000000' : 'white',
             margin: 0,
             marginBottom: '8px',
             lineHeight: '1.2',
             display: 'flex',
             alignItems: 'center',
-            gap: '8px'
+            gap: '8px',
+            justifyContent: 'space-between'
           }}>
             {lessonTitle}
-            <div style={{ position: 'relative', display: 'inline-block', flexShrink: 0, marginTop: '4px' }}>
+            <div style={{ position: 'relative', display: 'inline-block', flexShrink: 0, marginTop: '4px', marginLeft: '16px' }}>
               <img
                 src={
                   isBookmarkSelected
-                    ? (isBookmarkHovered ? '/bookmarkfilledhover.png' : '/bookmarkfilled.png')
-                    : (isBookmarkHovered ? '/bookmarkhover.png' : '/bookmark.png')
+                    ? (isBookmarkHovered 
+                        ? `/bookmarkfilledhover${isLightMode ? '(light)' : ''}.png`
+                        : `/bookmarkfilled${isLightMode ? '(light)' : ''}.png`)
+                    : (isBookmarkHovered 
+                        ? `/bookmarkhover${isLightMode ? '(light)' : ''}.png`
+                        : `/bookmark${isLightMode ? '(light)' : ''}.png`)
                 }
                 alt="Bookmark"
                 onMouseEnter={() => setIsBookmarkHovered(true)}
@@ -468,7 +540,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
                 }}
               />
               <img
-                src={isSourcesHovered ? '/sourceshover.png' : '/sources.png'}
+                src={`/sources${isSourcesHovered ? 'hover' : ''}${isLightMode ? '(light)' : ''}.png`}
                 alt="Sources"
                 onMouseEnter={() => setIsSourcesHovered(true)}
                 onMouseLeave={() => setIsSourcesHovered(false)}
@@ -493,7 +565,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
               fontFamily: "'Inter Tight', sans-serif",
               fontSize: '12px',
               fontWeight: 500,
-              color: isClinicianTextHovered ? '#2563eb' : 'white',
+              color: isClinicianTextHovered ? '#2563eb' : (isLightMode ? '#000000' : 'white'),
               transition: 'color 0.2s ease',
               cursor: 'pointer',
               display: 'inline-block',
@@ -506,590 +578,26 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
             style={{
               width: 'calc(100% - 0px)',
               height: '1px',
-              backgroundColor: '#3b4652',
+              backgroundColor: isLightMode ? '#d0d1d2' : '#3b4652',
               marginTop: '16px',
               marginLeft: '0',
               marginRight: '0',
               marginBottom: '0'
             }}
           />
-          {lessonId === 1 ? (
-            <>
-              {/* Section A - Always visible */}
-              <div style={{ position: 'relative' }}>
-                <p style={{
-                  fontFamily: "'Libre Baskerville', serif",
-                  fontSize: '12pt',
-                  color: 'white',
-                  lineHeight: '1.6',
-                  marginTop: '20px',
-                  marginBottom: '0',
-                  fontWeight: 400
-                }}>
-                  The human body is made of many parts (bones, muscles, heart, lungs, brain, stomach, etc.), each in a system with a special role. These systems must work together. Each system (like skeletal, muscular, circulatory, respiratory, nervous) has a main job, and health depends on them cooperating.
-                </p>
-                <img
-                  src="/lesson1image1.webp"
-                  alt="Lesson 1"
-                  style={{
-                    width: '96%',
-                    height: 'auto',
-                    marginTop: '20px',
-                    display: 'block'
-                  }}
-                />
-                <div
-                  style={{
-                    width: 'calc(100% - 0px)',
-                    height: '1px',
-                    backgroundColor: '#3b4652',
-                    marginTop: '16px',
-                    marginLeft: '0',
-                    marginRight: '0',
-                    marginBottom: '0'
-                  }}
-                />
-                <p style={{
-                  fontFamily: "'Inter Tight', sans-serif",
-                  fontSize: '8pt',
-                  color: '#3b4652',
-                  marginTop: '12px',
-                  marginBottom: '0',
-                  fontWeight: 400
-                }}>
-                  Figure 1.1: Anatomical rendering of the human torso, the lungs and heart shown in warm relief
-                </p>
-              </div>
-              
-              {/* Section B - Always visible */}
-              <div style={{ position: 'relative', marginTop: '20px' }}>
-                <ul style={{
-                  fontFamily: "'Libre Baskerville', serif",
-                  fontSize: '12pt',
-                  color: 'white',
-                  lineHeight: '1.6',
-                  marginTop: '20px',
-                  marginBottom: '0',
-                  fontWeight: 400,
-                  paddingLeft: '20px',
-                  listStyleType: 'disc'
-                }}>
-                  <li style={{ marginBottom: '12px' }}>
-                    Major body systems include skeletal (bones), muscular (muscles), circulatory (heart/vessels), respiratory (lungs), nervous (brain/nerves), digestive, and others.
-                  </li>
-                  <li style={{ marginBottom: '12px' }}>
-                    Bones (skeletal) and muscles (muscular) work together: bones provide shape/support and protect organs, while muscles pull on bones to move. For example, the ribcage (bones) shields the heart and lungs.
-                  </li>
-                  <li style={{ marginBottom: '0' }}>
-                    The heart and blood vessels (circulatory system) work with the lungs (respiratory system) to pump oxygenated blood to every cell. The brain and nerves (nervous system) send messages between the brain and body parts.
-                  </li>
-                </ul>
-                <img
-                  src="/lesson1image2.avif"
-                  alt="Lesson 1"
-                  style={{
-                    width: '96%',
-                    height: 'auto',
-                    marginTop: '20px',
-                    display: 'block'
-                  }}
-                />
-                <div
-                  style={{
-                    width: 'calc(100% - 0px)',
-                    height: '1px',
-                    backgroundColor: '#3b4652',
-                    marginTop: '16px',
-                    marginLeft: '0',
-                    marginRight: '0',
-                    marginBottom: '0'
-                  }}
-                />
-                <p style={{
-                  fontFamily: "'Inter Tight', sans-serif",
-                  fontSize: '8pt',
-                  color: '#3b4652',
-                  marginTop: '12px',
-                  marginBottom: '0',
-                  fontWeight: 400
-                }}>
-                  Figure 1.2 | Illustration of the human body, presenting the major internal organs in careful proportion
-                </p>
-              </div>
-              
-              {/* Section C - Always visible */}
-              <div style={{ marginTop: '20px' }}>
-                <p style={{
-                  fontFamily: "'Libre Baskerville', serif",
-                  fontSize: '12pt',
-                  color: 'white',
-                  lineHeight: '1.6',
-                  marginTop: '20px',
-                  marginBottom: '0',
-                  fontWeight: 400
-                }}>
-                  Organs are parts of systems (e.g. heart is an organ of the circulatory system, lungs are organs of the respiratory system, brain of the nervous system). Each organ is made of tissues of cells. Cells form tissues, tissues form organs, and organs form systems.
-                </p>
-                <p style={{
-                  fontFamily: "'Libre Baskerville', serif",
-                  fontSize: '12pt',
-                  color: 'white',
-                  lineHeight: '1.6',
-                  marginTop: '16px',
-                  marginBottom: '0',
-                  fontWeight: 400
-                }}>
-                  Keeping all systems healthy (through nutrition, exercise, rest) ensures the whole body works well.
-                </p>
-              </div>
-              {/* Sources Section - Always visible */}
-              <div ref={sourcesSectionRef}>
-                <div
-                  style={{
-                    width: 'calc(100% - 0px)',
-                    height: '1px',
-                    backgroundColor: '#3b4652',
-                    marginTop: '20px',
-                    marginLeft: '0',
-                    marginRight: '0',
-                    marginBottom: '0'
-                  }}
-                />
-                <div style={{
-                  fontFamily: "'Inter Tight', sans-serif",
-                  fontSize: '10px',
-                  fontWeight: 700,
-                  color: 'white',
-                  marginTop: '16px',
-                  marginBottom: '12px'
-                }}>
-                  Sources
-                </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {/* Learning Resources */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                  <img
-                    src="https://www.google.com/s2/favicons?domain=learningresources.com&sz=32"
-                    alt="Learning Resources"
-                    style={{
-                      width: '20px',
-                      height: '20px',
-                      flexShrink: 0,
-                      marginTop: '2px'
-                    }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{
-                      fontFamily: "'Inter Tight', sans-serif",
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      color: 'white',
-                      marginBottom: '4px'
-                    }}>
-                      Learning Resources
-                    </div>
-                    <a
-                      href="https://learningresources.com/media/pdf/lr/resources/10-Easy-Steps-to-Teaching-The-Human-Body.pdf?srsltid=AfmBOorwBbdindou-o5z_WL1Y6T_NQY0DbNrrKslvIiEJmMzPZaM294-#:~:text=The%20human%20body%20is%20the,it%20working%20at%20its%20best"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        fontFamily: "'Inter Tight', sans-serif",
-                        fontSize: '10px',
-                        fontWeight: 400,
-                        color: 'white',
-                        textDecoration: 'none',
-                        display: 'block',
-                        wordBreak: 'break-all'
-                      }}
-                      onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
-                      onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
-                    >
-                      https://learningresources.com/media/pdf/lr/resources/10-Easy-Steps-to-Teaching-The-Human-Body.pdf
-                    </a>
-                  </div>
-                </div>
-                {/* Britannica */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                  <img
-                    src="https://www.google.com/s2/favicons?domain=britannica.com&sz=32"
-                    alt="Britannica"
-                    style={{
-                      width: '20px',
-                      height: '20px',
-                      flexShrink: 0,
-                      marginTop: '2px'
-                    }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{
-                      fontFamily: "'Inter Tight', sans-serif",
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      color: 'white',
-                      marginBottom: '4px'
-                    }}>
-                      Britannica
-                    </div>
-                    <a
-                      href="https://www.britannica.com/science/human-body"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        fontFamily: "'Inter Tight', sans-serif",
-                        fontSize: '10px',
-                        fontWeight: 400,
-                        color: 'white',
-                        textDecoration: 'none',
-                        display: 'block',
-                        wordBreak: 'break-all'
-                      }}
-                      onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
-                      onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
-                    >
-                      https://www.britannica.com/science/human-body
-                    </a>
-                  </div>
-                </div>
-                {/* Medical News Today */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                  <img
-                    src="https://www.google.com/s2/favicons?domain=medicalnewstoday.com&sz=32"
-                    alt="Medical News Today"
-                    style={{
-                      width: '20px',
-                      height: '20px',
-                      flexShrink: 0,
-                      marginTop: '2px'
-                    }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{
-                      fontFamily: "'Inter Tight', sans-serif",
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      color: 'white',
-                      marginBottom: '4px'
-                    }}>
-                      Medical News Today
-                    </div>
-                    <a
-                      href="https://www.medicalnewstoday.com/articles/organs-in-the-body"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        fontFamily: "'Inter Tight', sans-serif",
-                        fontSize: '10px',
-                        fontWeight: 400,
-                        color: 'white',
-                        textDecoration: 'none',
-                        display: 'block',
-                        wordBreak: 'break-all'
-                      }}
-                      onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
-                      onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
-                    >
-                      https://www.medicalnewstoday.com/articles/organs-in-the-body
-                    </a>
-                  </div>
-                </div>
-              </div>
-              </div>
-              {/* Sources Section End */}
-            </>
-          ) : lessonId === 2 ? (
-            <>
-              {/* Section A - Always visible */}
-              <div style={{ position: 'relative' }}>
-                <p style={{
-                  fontFamily: "'Libre Baskerville', serif",
-                  fontSize: '12pt',
-                  color: 'white',
-                  lineHeight: '1.6',
-                  marginTop: '20px',
-                  marginBottom: '0',
-                  fontWeight: 400
-                }}>
-                  Cells are the tiny units of life in our bodies; they are the basic building blocks of the body. Every tissue and organ is made of many cells. Cells are so small we need a microscope to see them, but our body has trillions. Each cell has a job (e.g. muscle cells help us move, nerve cells send signals). Cells can divide to make new cells, which helps us grow and heal.
-                </p>
-                <img
-                  src="/lesson2image1.png"
-                  alt="Lesson 2"
-                  style={{
-                    width: '96%',
-                    height: 'auto',
-                    marginTop: '20px',
-                    display: 'block'
-                  }}
-                />
-                <div
-                  style={{
-                    width: 'calc(100% - 0px)',
-                    height: '1px',
-                    backgroundColor: '#3b4652',
-                    marginTop: '16px',
-                    marginLeft: '0',
-                    marginRight: '0',
-                    marginBottom: '0'
-                  }}
-                />
-                <p style={{
-                  fontFamily: "'Inter Tight', sans-serif",
-                  fontSize: '8pt',
-                  color: '#3b4652',
-                  marginTop: '12px',
-                  marginBottom: '0',
-                  fontWeight: 400
-                }}>
-                  Figure 2.1 | Red blood cells suspended in motion, their flattened, disc-like form optimized to carry oxygen efficiently through the body's narrowest vessels.
-                </p>
-              </div>
-              
-              {/* Section B - Always visible */}
-              <div style={{ position: 'relative', marginTop: '20px' }}>
-                <ul style={{
-                  fontFamily: "'Libre Baskerville', serif",
-                  fontSize: '12pt',
-                  color: 'white',
-                  lineHeight: '1.6',
-                  marginTop: '20px',
-                  marginBottom: '0',
-                  fontWeight: 400,
-                  paddingLeft: '20px',
-                  listStyleType: 'disc'
-                }}>
-                  <li style={{ marginBottom: '12px' }}>
-                    Cells are tiny but numerous: the body contains trillions of cells. Each type of cell has a function (muscle cells contract for movement, nerve cells send messages). Groups of similar cells form tissues.
-                  </li>
-                  <li style={{ marginBottom: '12px' }}>
-                    When we eat and play, cells need to divide to grow new tissue and replace old or injured cells. Cell division copies the cell's genes so the new cell is like the original.
-                  </li>
-                  <li style={{ marginBottom: '0' }}>
-                    Cells organize life: many similar cells make a tissue, and different tissues combine to make an organ. For example, heart muscle cells form cardiac tissue, and cardiac tissue (with other tissue types) makes the heart organ.
-                  </li>
-                </ul>
-                <img
-                  src="/lesson2image2.png"
-                  alt="Lesson 2"
-                  style={{
-                    width: '96%',
-                    height: 'auto',
-                    marginTop: '20px',
-                    display: 'block'
-                  }}
-                />
-                <div
-                  style={{
-                    width: 'calc(100% - 0px)',
-                    height: '1px',
-                    backgroundColor: '#3b4652',
-                    marginTop: '16px',
-                    marginLeft: '0',
-                    marginRight: '0',
-                    marginBottom: '0'
-                  }}
-                />
-                <p style={{
-                  fontFamily: "'Inter Tight', sans-serif",
-                  fontSize: '8pt',
-                  color: '#3b4652',
-                  marginTop: '12px',
-                  marginBottom: '0',
-                  fontWeight: 400
-                }}>
-                  Figure 2.2 | A fluorescence micrograph of intestinal tissue placed under a microscope, revealing tightly folded layers of cells and microbes.
-                </p>
-              </div>
-              
-              {/* Section C - Always visible */}
-              <div style={{ marginTop: '20px' }}>
-                <p style={{
-                  fontFamily: "'Libre Baskerville', serif",
-                  fontSize: '12pt',
-                  color: 'white',
-                  lineHeight: '1.6',
-                  marginTop: '20px',
-                  marginBottom: '0',
-                  fontWeight: 400
-                }}>
-                  Cells keep tissues healthy. Healthy muscle tissue comes from healthy muscle cells working together. If cells multiply healthily, organs grow and work well.
-                </p>
-                <p style={{
-                  fontFamily: "'Libre Baskerville', serif",
-                  fontSize: '12pt',
-                  color: 'white',
-                  lineHeight: '1.6',
-                  marginTop: '16px',
-                  marginBottom: '0',
-                  fontWeight: 400
-                }}>
-                  Remember it goes cells → tissues → organs → systems. This pattern repeats at each level of our body's organization.
-                </p>
-              </div>
-              {/* Sources Section - Always visible */}
-              <div ref={sourcesSectionRef}>
-                <div
-                  style={{
-                    width: 'calc(100% - 0px)',
-                    height: '1px',
-                    backgroundColor: '#3b4652',
-                    marginTop: '20px',
-                    marginLeft: '0',
-                    marginRight: '0',
-                    marginBottom: '0'
-                  }}
-                />
-                <div style={{
-                  fontFamily: "'Inter Tight', sans-serif",
-                  fontSize: '10px',
-                  fontWeight: 700,
-                  color: 'white',
-                  marginTop: '16px',
-                  marginBottom: '12px'
-                }}>
-                  Sources
-                </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {/* CureSearch */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                  <img
-                    src="https://www.google.com/s2/favicons?domain=curesearch.org&sz=32"
-                    alt="CureSearch"
-                    style={{
-                      width: '20px',
-                      height: '20px',
-                      flexShrink: 0,
-                      marginTop: '2px'
-                    }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{
-                      fontFamily: "'Inter Tight', sans-serif",
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      color: 'white',
-                      marginBottom: '4px'
-                    }}>
-                      CureSearch
-                    </div>
-                    <a
-                      href="https://curesearch.org/What-is-Cancer#:~:text=Cells%20are%20the%20basic%20building,to%20perform%20either%20by%20itself"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        fontFamily: "'Inter Tight', sans-serif",
-                        fontSize: '10px',
-                        fontWeight: 400,
-                        color: 'white',
-                        textDecoration: 'none',
-                        display: 'block',
-                        wordBreak: 'break-all'
-                      }}
-                      onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
-                      onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
-                    >
-                      https://curesearch.org/What-is-Cancer
-                    </a>
-                  </div>
-                </div>
-                {/* Ambar Lab */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                  <img
-                    src="https://www.google.com/s2/favicons?domain=ambar-lab.com&sz=32"
-                    alt="Ambar Lab"
-                    style={{
-                      width: '20px',
-                      height: '20px',
-                      flexShrink: 0,
-                      marginTop: '2px'
-                    }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{
-                      fontFamily: "'Inter Tight', sans-serif",
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      color: 'white',
-                      marginBottom: '4px'
-                    }}>
-                      Ambar Lab
-                    </div>
-                    <a
-                      href="https://ambar-lab.com/en/what-are-erythrocytes-and-what-can-they-indicate-to-us/"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        fontFamily: "'Inter Tight', sans-serif",
-                        fontSize: '10px',
-                        fontWeight: 400,
-                        color: 'white',
-                        textDecoration: 'none',
-                        display: 'block',
-                        wordBreak: 'break-all'
-                      }}
-                      onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
-                      onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
-                    >
-                      https://ambar-lab.com/en/what-are-erythrocytes-and-what-can-they-indicate-to-us/
-                    </a>
-                  </div>
-                </div>
-                {/* Science Focus */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                  <img
-                    src="https://www.google.com/s2/favicons?domain=sciencefocus.com&sz=32"
-                    alt="Science Focus"
-                    style={{
-                      width: '20px',
-                      height: '20px',
-                      flexShrink: 0,
-                      marginTop: '2px'
-                    }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{
-                      fontFamily: "'Inter Tight', sans-serif",
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      color: 'white',
-                      marginBottom: '4px'
-                    }}>
-                      Science Focus
-                    </div>
-                    <a
-                      href="https://www.sciencefocus.com/news/human-cell-atlas"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        fontFamily: "'Inter Tight', sans-serif",
-                        fontSize: '10px',
-                        fontWeight: 400,
-                        color: 'white',
-                        textDecoration: 'none',
-                        display: 'block',
-                        wordBreak: 'break-all'
-                      }}
-                      onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
-                      onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
-                    >
-                      https://www.sciencefocus.com/news/human-cell-atlas
-                    </a>
-                  </div>
-                </div>
-              </div>
-              </div>
-              {/* Sources Section End */}
-            </>
-          ) : null}
+          <LessonContent lessonId={lessonId} sourcesSectionRef={sourcesSectionRef} isLightMode={isLightMode} />
           </div>
           {/* Top fade overlay */}
           <div
             style={{
               position: 'absolute',
-              top: '32px',
-              left: '32px',
-              right: '32px',
+              top: '0px',
+              left: '0px',
+              right: '0px',
               height: '60px',
-              background: 'linear-gradient(to bottom, rgba(22, 29, 37, 1) 0%, rgba(22, 29, 37, 0.8) 30%, rgba(22, 29, 37, 0) 100%)',
+              background: isLightMode 
+                ? 'linear-gradient(to bottom, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.8) 30%, rgba(255, 255, 255, 0) 100%)'
+                : 'linear-gradient(to bottom, rgba(22, 29, 37, 1) 0%, rgba(22, 29, 37, 0.8) 30%, rgba(22, 29, 37, 0) 100%)',
               pointerEvents: 'none',
               zIndex: 1000
             }}
@@ -1098,11 +606,13 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
           <div
             style={{
               position: 'absolute',
-              bottom: '32px',
-              left: '32px',
-              right: '32px',
+              bottom: '0px',
+              left: '0px',
+              right: '0px',
               height: '60px',
-              background: 'linear-gradient(to top, rgba(22, 29, 37, 1) 0%, rgba(22, 29, 37, 0.8) 30%, rgba(22, 29, 37, 0) 100%)',
+              background: isLightMode
+                ? 'linear-gradient(to top, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.8) 30%, rgba(255, 255, 255, 0) 100%)'
+                : 'linear-gradient(to top, rgba(22, 29, 37, 1) 0%, rgba(22, 29, 37, 0.8) 30%, rgba(22, 29, 37, 0) 100%)',
               pointerEvents: 'none',
               zIndex: 1000
             }}
@@ -1118,7 +628,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
             top: '50%',
             left: '50%',
             transform: 'translate(-50%, -50%)',
-            backgroundColor: '#161d25',
+            backgroundColor: isLightMode ? '#ffffff' : '#161d25',
             borderRadius: '12px',
             padding: '32px',
             zIndex: 1000002,
@@ -1128,7 +638,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-            <h3 style={{ color: 'white', fontSize: '20px', fontWeight: 600, fontFamily: "'Unbounded', sans-serif" }}>
+            <h3 style={{ color: isLightMode ? '#000000' : 'white', fontSize: '20px', fontWeight: 600, fontFamily: "'Unbounded', sans-serif" }}>
               Report Content
             </h3>
             <button
@@ -1136,7 +646,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
               style={{
                 background: 'transparent',
                 border: 'none',
-                color: 'white',
+                color: isLightMode ? '#000000' : 'white',
                 fontSize: '24px',
                 cursor: 'pointer',
                 padding: '0',
@@ -1148,7 +658,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
                 transition: 'color 0.2s'
               }}
               onMouseEnter={(e) => e.target.style.color = '#999'}
-              onMouseLeave={(e) => e.target.style.color = 'white'}
+              onMouseLeave={(e) => e.target.style.color = isLightMode ? '#000000' : 'white'}
             >
               ×
             </button>
@@ -1162,7 +672,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
                 onChange={() => handleFlagReasonChange('inaccurate')}
                 style={{ width: '18px', height: '18px', cursor: 'pointer' }}
               />
-              <span style={{ color: 'white', fontSize: '16px', fontFamily: "'Inter Tight', sans-serif" }}>
+              <span style={{ color: isLightMode ? '#000000' : 'white', fontSize: '16px', fontFamily: "'Inter Tight', sans-serif" }}>
                 This content is inaccurate/misleading
               </span>
             </label>
@@ -1174,7 +684,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
                 onChange={() => handleFlagReasonChange('harmful')}
                 style={{ width: '18px', height: '18px', cursor: 'pointer' }}
               />
-              <span style={{ color: 'white', fontSize: '16px', fontFamily: "'Inter Tight', sans-serif" }}>
+              <span style={{ color: isLightMode ? '#000000' : 'white', fontSize: '16px', fontFamily: "'Inter Tight', sans-serif" }}>
                 This content promotes harm or is inappropriate
               </span>
             </label>
@@ -1213,7 +723,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
                 width: '100%',
                 minHeight: '100px',
                 backgroundColor: '#29323c',
-                color: 'white',
+                color: isLightMode ? '#000000' : 'white',
                 border: 'none',
                 borderRadius: '8px',
                 padding: '12px',
@@ -1232,7 +742,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
               style={{
                 padding: '10px 20px',
                 backgroundColor: '#2563eb',
-                color: 'white',
+                color: isLightMode ? '#000000' : 'white',
                 border: 'none',
                 borderRadius: '8px',
                 cursor: 'pointer',
@@ -1253,8 +763,18 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
       {/* Back Button */}
       <button
         onClick={onQuit}
-        className="absolute p-2 text-white hover:text-gray-300"
-        style={{ fontSize: '24px', zIndex: 10000, position: 'fixed', top: '20px', left: '60px' }}
+        className="absolute p-2"
+        style={{ 
+          fontSize: '24px', 
+          zIndex: 10000, 
+          position: 'fixed', 
+          top: '20px', 
+          left: '60px',
+          color: isLightMode ? '#000000' : 'white',
+          transition: 'color 0.2s ease'
+        }}
+        onMouseEnter={(e) => e.target.style.color = isLightMode ? '#333333' : '#d1d5db'}
+        onMouseLeave={(e) => e.target.style.color = isLightMode ? '#000000' : 'white'}
       >
         ←
       </button>
@@ -1266,7 +786,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
         left: 0,
         right: 0,
         height: '80px',
-        backgroundColor: '#161d25',
+        backgroundColor: isLightMode ? '#ffffff' : '#161d25',
         zIndex: 1000
       }} />
 
@@ -1280,14 +800,17 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
         display: 'flex',
         alignItems: 'center',
         gap: '12px',
-        width: 'calc(100% - 64px)',
-        maxWidth: '800px'
+        width: (isPracticeMode || isReviewOrSkipQuiz) ? 'auto' : 'calc(100% - 64px)',
+        maxWidth: (isPracticeMode || isReviewOrSkipQuiz) ? '800px' : '800px',
+        justifyContent: (isPracticeMode || isReviewOrSkipQuiz) ? 'center' : 'flex-start'
       }}>
         {/* Main progress bar */}
         <div style={{
-          flex: 1,
+          flex: (isPracticeMode || isReviewOrSkipQuiz) ? '0 0 auto' : 1,
+          width: (isPracticeMode || isReviewOrSkipQuiz) ? '800px' : 'auto',
+          maxWidth: '800px',
           height: '8px',
-          backgroundColor: '#3b4652',
+          backgroundColor: isLightMode ? '#d0d1d2' : '#3b4652',
           borderRadius: '2px',
           overflow: 'hidden',
           position: 'relative'
@@ -1300,25 +823,27 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
             transition: 'width 0.3s ease'
           }} />
         </div>
-        {/* Last 3 questions indicators */}
-        <div style={{
-          display: 'flex',
-          gap: '8px',
-          alignItems: 'center'
-        }}>
-          {lastThreeQuestions.map((status, index) => (
-            <div
-              key={index}
-              style={{
-                width: '8px',
-                height: '8px',
-                borderRadius: '2px',
-                backgroundColor: status === 'correct' ? '#2563eb' : status === 'wrong' ? '#f73d35' : '#3b4652',
-                transition: 'background-color 0.3s ease'
-              }}
-            />
-          ))}
-        </div>
+        {/* Last 3 questions indicators - only show for regular lessons (not practice, review, or skip quiz) */}
+        {!isPracticeMode && !isReviewOrSkipQuiz && (
+          <div style={{
+            display: 'flex',
+            gap: '8px',
+            alignItems: 'center'
+          }}>
+            {lastThreeQuestions.map((status, index) => (
+              <div
+                key={index}
+                style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '2px',
+                  backgroundColor: status === 'correct' ? '#2563eb' : status === 'wrong' ? '#f73d35' : (isLightMode ? '#d0d1d2' : '#3b4652'),
+                  transition: 'background-color 0.3s ease'
+                }}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Shadow at top */}
@@ -1356,34 +881,51 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
           <div className="flex justify-center px-8">
             <div className="flex items-center" style={{ width: '100%', maxWidth: '800px', position: 'relative' }}>
               <h2
-                className="text-base md:text-lg text-white text-left"
+                className="text-base md:text-lg text-left"
                 style={{ 
                   fontFamily: "'Unbounded', sans-serif", 
                   fontWeight: 500, 
                   lineHeight: '1.5',
-                  paddingRight: ([1, 4, 5, 6, 7, 8].includes(questionIndex)) ? '80px' : '0'
+                  paddingRight: '100px',
+                  color: isLightMode ? '#000000' : 'white'
                 }}
               >
                 {questionData?.question || 'Select the correct answer'}
               </h2>
               {/* Icons container */}
               <div className="flex items-center gap-4" style={{ position: 'absolute', right: '0px' }}>
-                <div style={{ position: 'relative' }}>
-                  <img 
-                    src={hoveredIcon === 'book' ? "/book-alt (1)(hover).png" : "/book-alt (1).png"} 
-                    alt="Book" 
-                    className="h-6 w-6"
-                    style={{ cursor: 'pointer', position: 'relative', zIndex: 1 }}
-                    onMouseEnter={() => setHoveredIcon('book')}
-                    onMouseLeave={() => setHoveredIcon(null)}
-                    onClick={handleBookClick}
-                  />
-                </div>
+                {showContentButton && (
+                  <div style={{ position: 'relative' }}>
+                    <img 
+                      src={hoveredIcon === 'book' 
+                        ? (isLightMode ? '/lighthover1.png' : '/book-alt (1) (hover).png')
+                        : (isLightMode ? '/book-alt (1)(light).png' : '/book-alt (1).png')} 
+                      alt="Book" 
+                      style={{ 
+                        cursor: 'pointer', 
+                        position: 'relative', 
+                        zIndex: 1, 
+                        width: '24px', 
+                        height: '24px',
+                        opacity: hoveredIcon === 'book' ? 0.7 : 1,
+                        transition: 'opacity 0.2s ease'
+                      }}
+                      onMouseEnter={() => setHoveredIcon('book')}
+                      onMouseLeave={() => setHoveredIcon(null)}
+                      onClick={handleBookClick}
+                      onError={(e) => {
+                        // Fallback to normal image if hover image doesn't exist
+                        e.target.src = isLightMode ? '/book-alt (1)(light).png' : '/book-alt (1).png'
+                      }}
+                    />
+                  </div>
+                )}
                 <img 
-                  src={hoveredIcon === 'flag' ? "/finish-flag(hover).png" : "/finish-flag.png"} 
+                  src={hoveredIcon === 'flag' 
+                    ? (isLightMode ? '/lighthover2.png' : '/finish-flag(hover).png')
+                    : (isLightMode ? '/finish-flag(light).png' : '/finish-flag.png')} 
                   alt="Flag" 
-                  className="h-6 w-6"
-                  style={{ cursor: 'pointer' }}
+                  style={{ cursor: 'pointer', width: '24px', height: '24px' }}
                   onMouseEnter={() => setHoveredIcon('flag')}
                   onMouseLeave={() => setHoveredIcon(null)}
                   onClick={handleFlagClick}
@@ -1396,9 +938,9 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
         {/* Options - Using MCQbox assets */}
         <div className="flex flex-col justify-center items-center gap-4 px-8" style={{ minHeight: '200px', paddingTop: '0px', paddingBottom: '40px' }}>
           {!questionData ? (
-            <div style={{ color: 'white' }}>Loading question data...</div>
+            <div style={{ color: isLightMode ? '#000000' : 'white' }}>Loading question data...</div>
           ) : !questionData.options || questionData.options.length === 0 ? (
-            <div style={{ color: 'white' }}>No options available</div>
+            <div style={{ color: isLightMode ? '#000000' : 'white' }}>No options available</div>
           ) : (
             questionData.options.map((option) => {
               const optionId = option.id
@@ -1446,11 +988,15 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
                   <img
                     src={getMCQBoxImage(currentState, isPressed, isHovered)}
                     alt="Option"
+                    draggable="false"
                     style={{
                       width: '100%',
                       height: 'auto',
                       display: 'block',
-                      pointerEvents: 'none'
+                      pointerEvents: 'none',
+                      userSelect: 'none',
+                      WebkitUserSelect: 'none',
+                      MozUserSelect: 'none'
                     }}
                   />
                   {/* Text centered on box, moved up, moves down when pressed */}
@@ -1460,7 +1006,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
                       top: '50%',
                       left: '50%',
                       transform: `translate(-50%, ${isPressed ? 'calc(-50% + 2px)' : 'calc(-50% - 2px)'})`,
-                      color: 'white',
+                      color: isLightMode ? '#000000' : 'white',
                       fontFamily: "'Inter Tight', sans-serif",
                       fontSize: '16px',
                       fontWeight: 500,
@@ -1503,7 +1049,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
         left: 0,
         right: 0,
         height: '120px',
-        backgroundColor: '#161d25',
+        backgroundColor: isLightMode ? '#ffffff' : '#161d25',
         zIndex: 50
       }} />
 
@@ -1511,7 +1057,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
       <div style={{
         width: '100%',
         height: questionState === 'correct' ? (isTransitioning ? '0px' : '120px') : '0px',
-        backgroundColor: '#1f5d07',
+        backgroundColor: isLightMode ? '#caffb5ff' : '#1f5d07',
         position: 'fixed',
         bottom: 0,
         left: 0,
@@ -1524,7 +1070,7 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
       <div style={{
         width: '100%',
         height: '4px',
-        backgroundColor: questionState === 'correct' && !isTransitioning ? '#51de18' : '#3b4652',
+        backgroundColor: questionState === 'correct' && !isTransitioning ? '#51de18' : (isLightMode ? '#d0d1d2' : '#3b4652'),
         position: 'fixed',
         bottom: '120px',
         left: 0,
@@ -1563,12 +1109,16 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
             <img
               src={getSubmitButtonImage()}
               alt="Submit"
+              draggable="false"
               style={{ 
                 display: 'block',
                 width: '133px',
                 height: '67px',
                 objectFit: 'contain',
-                pointerEvents: 'none'
+                pointerEvents: 'none',
+                userSelect: 'none',
+                WebkitUserSelect: 'none',
+                MozUserSelect: 'none'
               }}
             />
           </button>
@@ -1594,12 +1144,16 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
               <img
                 src={getSubmitButtonImage()}
                 alt="Understood"
+                draggable="false"
                 style={{ 
                   display: 'block',
                   width: '133px',
                   height: '67px',
                   objectFit: 'contain',
-                  pointerEvents: 'none'
+                  pointerEvents: 'none',
+                  userSelect: 'none',
+                  WebkitUserSelect: 'none',
+                  MozUserSelect: 'none'
                 }}
               />
             </button>
@@ -1608,90 +1162,28 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
               alt="Hint"
               onMouseEnter={() => setIsLightbulbHovered(true)}
               onMouseLeave={() => setIsLightbulbHovered(false)}
-              className="h-6 w-6"
               style={{
                 cursor: 'pointer',
-                display: 'block'
+                display: 'block',
+                width: '24px',
+                height: '24px'
               }}
             />
           </div>
         )}
-
-        {(questionState === 'wrong' || questionState === 'correct') && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <button
-              onClick={handleContinue}
-              onMouseDown={() => setIsButtonPressed(true)}
-              onMouseUp={() => setIsButtonPressed(false)}
-              onMouseLeave={() => setIsButtonPressed(false)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                padding: 0,
-                margin: 0,
-                cursor: 'pointer',
-                width: '133px',
-                height: '67px'
-              }}
-            >
-              <img
-                src={getSubmitButtonImage()}
-                alt="Continue"
-                style={{ 
-                  display: 'block',
-                  width: '133px',
-                  height: '67px',
-                  objectFit: 'contain',
-                  pointerEvents: 'none'
-                }}
-              />
-            </button>
-            {questionState === 'wrong' && (
-              <img
-                src={isLightbulbHovered ? "/lightbulb-question-hover.png" : "/lightbulb-question.png"}
-                alt="Hint"
-                onMouseEnter={() => setIsLightbulbHovered(true)}
-                onMouseLeave={() => setIsLightbulbHovered(false)}
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  cursor: 'pointer',
-                  display: 'block'
-                }}
-              />
-            )}
-          </div>
-        )}
       </div>
 
-      {/* Correct Text - Follows Green Box, Centered with Submit Button */}
-      {questionState === 'correct' && !isTransitioning && (
+      {/* Continue Button - Inside green box when correct, far right */}
+      {(questionState === 'wrong' || questionState === 'correct') && (
         <div style={{ 
-          position: 'fixed', 
-          bottom: '60.5px',
-          left: 'calc(50% + 5px)',
-          transform: 'translateX(-50%) translateY(50%)',
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '12px',
+          position: 'fixed',
+          bottom: questionState === 'correct' ? '32px' : '32px', // Inside green box (at bottom of box)
+          right: questionState === 'correct' ? '32px' : '32px', // Far right inside green box
           zIndex: 70,
-          animation: 'slideUpWithBoxCenteredText 0.167s ease-out forwards',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '4px',
-          fontFamily: "'Unbounded', sans-serif"
-        }}>
-          <span style={{ color: 'white', fontSize: '24px', fontWeight: 600 }}>Correct!</span>
-          <span style={{ color: '#51de18', fontSize: '22px', fontWeight: 600, fontFamily: "'Inter Tight', sans-serif" }}>+5xp</span>
-        </div>
-      )}
-
-      {/* Duplicate Button - Follows Green Box, Centered in Box */}
-      {questionState === 'correct' && !isTransitioning && (
-        <div className="flex justify-end items-center" style={{ 
-          position: 'fixed', 
-          bottom: '27px',
-          right: '32px',
-          zIndex: 70,
-          animation: 'slideUpWithBoxCentered 0.167s ease-out forwards',
-          height: '67px'
+          transition: questionState === 'correct' ? 'bottom 0.2s ease-out, right 0.2s ease-out' : 'none'
         }}>
           <button
             onClick={handleContinue}
@@ -1709,19 +1201,59 @@ const MCQ = forwardRef(({ onContinue, onCorrectAnswer, isInTransition, isTransit
             }}
           >
             <img
-              src={getDuplicateButtonImage()}
+              src={getContinueButtonImage()}
               alt="Continue"
+              draggable="false"
               style={{ 
                 display: 'block',
                 width: '133px',
                 height: '67px',
                 objectFit: 'contain',
-                pointerEvents: 'none'
+                pointerEvents: 'none',
+                userSelect: 'none',
+                WebkitUserSelect: 'none',
+                MozUserSelect: 'none'
               }}
             />
           </button>
+          {questionState === 'wrong' && (
+            <img
+              src={isLightbulbHovered ? "/lightbulb-question-hover.png" : "/lightbulb-question.png"}
+              alt="Hint"
+              onMouseEnter={() => setIsLightbulbHovered(true)}
+              onMouseLeave={() => setIsLightbulbHovered(false)}
+              style={{
+                width: '32px',
+                height: '32px',
+                cursor: 'pointer',
+                display: 'block'
+              }}
+            />
+          )}
         </div>
       )}
+
+      {/* Correct Text - Centered inside green box */}
+      {questionState === 'correct' && !isTransitioning && (
+        <div style={{ 
+          position: 'fixed', 
+          bottom: '50px', // Slightly lower for better visual centering
+          left: '50%',
+          transform: 'translateX(-50%)', // Horizontally centered
+          zIndex: 70,
+          animation: 'slideUpWithBoxCenteredText 0.167s ease-out forwards',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          fontFamily: "'Unbounded', sans-serif"
+        }}>
+          <span style={{ color: isLightMode ? '#000000' : '#ffffff', fontSize: '24px', fontWeight: 600 }}>Correct!</span>
+          <span style={{ color: '#51de18', fontSize: '22px', fontWeight: 600, fontFamily: "'Inter Tight', sans-serif" }}>
+            +{isPracticeMode && !isPersonalizedPractice ? '2' : '5'}xp
+          </span>
+        </div>
+      )}
+
     </div>
   )
 })

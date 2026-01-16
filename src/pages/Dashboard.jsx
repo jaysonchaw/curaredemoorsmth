@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Outlet, NavLink } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
+import { supabase } from '../services/authService'
 
 const Dashboard = () => {
   const navigate = useNavigate()
